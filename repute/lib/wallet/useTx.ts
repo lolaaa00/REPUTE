@@ -44,6 +44,30 @@ export function useTx(address: `0x${string}` | null, opts?: UseTxOptions) {
         await client.connect("studionet");
 
         const { hash, result } = await fn(client, setStatus);
+
+        // Verify consensus outcome before declaring success
+        const receipt = result as Record<string, unknown> | null | undefined;
+        const consensusData = receipt?.consensus_data as Record<string, unknown> | undefined;
+        const finalResult = consensusData?.final_result as Record<string, unknown> | undefined;
+        const execResult = finalResult?.result as Record<string, unknown> | undefined;
+
+        // Check execution success: look for error indicators in the receipt
+        const hasError =
+          execResult?.error != null ||
+          execResult?.execution_error != null ||
+          (typeof execResult?.message === "string" && execResult.message.toLowerCase().includes("revert"));
+
+        if (hasError) {
+          const errMsg =
+            (execResult?.error as string) ||
+            (execResult?.execution_error as string) ||
+            (execResult?.message as string) ||
+            "Transaction reverted on-chain";
+          setTx({ ...INITIAL_TX_STATE, status: "EXECUTION_ERROR", error: errMsg });
+          opts?.onError?.(errMsg);
+          return;
+        }
+
         setTx(s => ({ ...s, status: "EXECUTION_CONFIRMED", hash, result }));
 
         // Re-read state

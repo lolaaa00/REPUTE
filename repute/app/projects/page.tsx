@@ -2,13 +2,18 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getNextProfileId, getProfile, BorrowerProfile } from "@/lib/contract/profile";
+import { getNextProfileId, getProfile, getProfileCreditBand, BorrowerProfile } from "@/lib/contract/profile";
 import { getProfileAddress } from "@/lib/contract/addresses";
 import { CreditBadge } from "@/components/ui/CreditBadge";
 import type { CreditBand } from "@/lib/contract/profile";
 
+interface ProfileWithBand {
+  profile: BorrowerProfile;
+  band: CreditBand;
+}
+
 export default function ProjectsPage() {
-  const [profiles, setProfiles] = useState<BorrowerProfile[]>([]);
+  const [profiles, setProfiles] = useState<ProfileWithBand[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,9 +27,16 @@ export default function ProjectsPage() {
           ids.push(BigInt(i));
         }
         const results = await Promise.all(
-          ids.map(id => getProfile(addr, id).catch(() => null))
+          ids.map(async id => {
+            const profile = await getProfile(addr, id).catch(() => null);
+            if (!profile) return null;
+            const band = profile.has_review
+              ? await getProfileCreditBand(addr, id).catch(() => "NONE" as CreditBand)
+              : ("NONE" as CreditBand);
+            return { profile, band };
+          })
         );
-        setProfiles(results.filter(Boolean) as BorrowerProfile[]);
+        setProfiles(results.filter(Boolean) as ProfileWithBand[]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -77,18 +89,15 @@ export default function ProjectsPage() {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 24 }}>
-        {profiles.map(p => (
-          <ProfileCard key={p.profile_id} profile={p} />
+        {profiles.map(({ profile, band }) => (
+          <ProfileCard key={profile.profile_id} profile={profile} band={band} />
         ))}
       </div>
     </div>
   );
 }
 
-function ProfileCard({ profile }: { profile: BorrowerProfile }) {
-  const band = profile.has_review
-    ? ("STARTER" as CreditBand) // Will be fetched per-card ideally
-    : ("NONE" as CreditBand);
+function ProfileCard({ profile, band }: { profile: BorrowerProfile; band: CreditBand }) {
 
   return (
     <Link

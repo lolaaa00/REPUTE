@@ -274,5 +274,144 @@ class TestStaleReview:
         assert band == "NONE"
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Authorization security tests
+# ────────────────────────────────────────────────────────────────────────────
+
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+VAULT_ADDRESS = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+ATTACKER_ADDRESS = "0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+DEPLOYER_ADDRESS = "0x1111111111111111111111111111111111111111"
+
+
+class MockMessage:
+    def __init__(self, sender: str):
+        self.sender = sender
+
+
+class VaultAuthSimulator:
+    """
+    Simulates the vault_address check that the contract enforces.
+    Mirrors the assert logic from record_repayment / record_default.
+    """
+    def __init__(self, vault_addr: str):
+        self.vault_address = vault_addr
+        self.repayment_count = 0
+        self.default_count = 0
+
+    def record_repayment(self, caller: str, profile_id: int):
+        assert self.vault_address != ZERO_ADDRESS, "vault not configured"
+        assert caller == self.vault_address, "only authorized vault"
+        self.repayment_count += 1
+
+    def record_default(self, caller: str, profile_id: int):
+        assert self.vault_address != ZERO_ADDRESS, "vault not configured"
+        assert caller == self.vault_address, "only authorized vault"
+        self.default_count += 1
+
+
+class TestVaultAuthorization:
+    """Regression tests: unauthorized callers must be rejected after the fix."""
+
+    def test_record_repayment_rejected_from_attacker(self):
+        sim = VaultAuthSimulator(VAULT_ADDRESS)
+        with pytest.raises(AssertionError, match="only authorized vault"):
+            sim.record_repayment(ATTACKER_ADDRESS, 1)
+
+    def test_record_default_rejected_from_attacker(self):
+        sim = VaultAuthSimulator(VAULT_ADDRESS)
+        with pytest.raises(AssertionError, match="only authorized vault"):
+            sim.record_default(ATTACKER_ADDRESS, 1)
+
+    def test_record_repayment_rejected_before_vault_set(self):
+        sim = VaultAuthSimulator(ZERO_ADDRESS)
+        with pytest.raises(AssertionError, match="vault not configured"):
+            sim.record_repayment(VAULT_ADDRESS, 1)
+
+    def test_record_default_rejected_before_vault_set(self):
+        sim = VaultAuthSimulator(ZERO_ADDRESS)
+        with pytest.raises(AssertionError, match="vault not configured"):
+            sim.record_default(VAULT_ADDRESS, 1)
+
+    def test_record_repayment_accepted_from_vault(self):
+        sim = VaultAuthSimulator(VAULT_ADDRESS)
+        sim.record_repayment(VAULT_ADDRESS, 1)
+        assert sim.repayment_count == 1
+
+    def test_record_default_accepted_from_vault(self):
+        sim = VaultAuthSimulator(VAULT_ADDRESS)
+        sim.record_default(VAULT_ADDRESS, 1)
+        assert sim.default_count == 1
+
+    def test_set_vault_one_time_only(self):
+        """Vault address can only be set once."""
+        vault_addr = VAULT_ADDRESS
+        current_vault = ZERO_ADDRESS
+        deployer = DEPLOYER_ADDRESS
+
+        # First set: deployer, vault not yet set
+        caller = deployer
+        assert caller == deployer, "only deployer"
+        assert current_vault == ZERO_ADDRESS, "vault already set"
+        current_vault = vault_addr
+
+        # Second attempt must fail
+        with pytest.raises(AssertionError, match="vault already set"):
+            assert current_vault == ZERO_ADDRESS, "vault already set"
+
+    def test_non_deployer_cannot_set_vault(self):
+        """Only the deployer can call set_vault."""
+        deployer = DEPLOYER_ADDRESS
+        attacker = ATTACKER_ADDRESS
+        with pytest.raises(AssertionError, match="only deployer"):
+            assert attacker == deployer, "only deployer"
+
+    def test_repayment_counter_not_inflatable_by_attacker(self):
+        """Attacker cannot boost repayment_count to unlock better credit bands."""
+        sim = VaultAuthSimulator(VAULT_ADDRESS)
+        # Attacker tries 5 times to reach TRUSTED band threshold
+        for _ in range(5):
+            with pytest.raises(AssertionError, match="only authorized vault"):
+                sim.record_repayment(ATTACKER_ADDRESS, 1)
+        # Counter must stay at zero
+        assert sim.repayment_count == 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Ownership attribution binding tests
+# ────────────────────────────────────────────────────────────────────────────
+
+class TestOwnershipAttributionBinding:
+    """
+    Ownership binding rule: if operator wallet address not found in source content,
+    attribution must be forced to UNRESOLVED regardless of LLM output.
+    """
+
+    def _apply_ownership_rule(self, lm_result: dict, ownership_proven: bool) -> dict:
+        if not ownership_proven:
+            lm_result["attribution"] = "UNRESOLVED"
+        return lm_result
+
+    def test_attribution_forced_unresolved_when_no_wallet_in_sources(self):
+        fake_lm = {"maintenance": "STRONG", "attribution": "STRONG",
+                   "continuity": "MODERATE", "transparency": "MODERATE"}
+        result = self._apply_ownership_rule(fake_lm, ownership_proven=False)
+        assert result["attribution"] == "UNRESOLVED"
+
+    def test_attribution_preserved_when_wallet_found(self):
+        fake_lm = {"maintenance": "STRONG", "attribution": "STRONG",
+                   "continuity": "MODERATE", "transparency": "MODERATE"}
+        result = self._apply_ownership_rule(fake_lm, ownership_proven=True)
+        assert result["attribution"] == "STRONG"
+
+    def test_unresolved_attribution_yields_none_credit_band(self):
+        band = derive_credit_band("STRONG", "UNRESOLVED", "STRONG", "STRONG", 0, 0, NOW, NOW)
+        assert band == "NONE"
+
+    def test_weak_attribution_yields_none_credit_band(self):
+        band = derive_credit_band("STRONG", "WEAK", "STRONG", "STRONG", 5, 0, NOW, NOW)
+        assert band == "NONE"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

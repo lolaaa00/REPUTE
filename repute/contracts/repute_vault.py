@@ -336,3 +336,26 @@ class ReputeVault(gl.Contract):
         # Record default on profile
         self._profile().record_default(profile_id)
         # No caller reward
+
+    # ── LP withdrawal ───────────────────────────────────────────────────────
+
+    @gl.public.write
+    def withdraw_liquidity(self, amount: u256):
+        """LP withdraws their deposited GEN, up to available liquidity."""
+        caller = gl.message.sender
+        amount_int = int(amount)
+        assert amount_int > 0, "amount must be positive"
+
+        current = int(self.lp_deposits.get(caller, u256(0)))
+        assert current >= amount_int, "insufficient lp balance"
+
+        avail = self._available_liquidity()
+        assert amount_int <= avail, "insufficient vault liquidity"
+
+        # Update-before-transfer
+        self.lp_deposits[caller] = u256(current - amount_int)
+        self.total_liquidity = u256(int(self.total_liquidity) - amount_int)
+
+        self._conservation_check()
+
+        caller.transfer(amount_int)
