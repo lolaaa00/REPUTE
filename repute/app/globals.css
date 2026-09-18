@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --cream: #EFE9DC;
+    --navy: #132033;
+    --emerald: #2E9D70;
+    --gold: #D9A441;
+    --cobalt: #315CFF;
+    --charcoal: #202225;
+    --cream-dim: #E5DECE;
+    --navy-light: #1D3048;
+    --text-primary: #132033;
+    --text-secondary: #5A6A7A;
+    --border: #D6CEBF;
+    --surface: #F7F3EC;
+    --surface-raised: #FFFFFF;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: "Manrope", system-ui, sans-serif;
+    background-color: var(--cream);
+    color: var(--navy);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-height: 100vh;
+    background-color: var(--cream);
+  }
+
+  h1, h2, h3, .display {
+    font-family: "DM Serif Display", Georgia, serif;
+  }
+
+  .mono {
+    font-family: "IBM Plex Mono", "Courier New", monospace;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--cobalt);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  .text-cream { color: var(--cream); }
+  .text-navy { color: var(--navy); }
+  .text-emerald { color: var(--emerald); }
+  .text-gold { color: var(--gold); }
+  .text-cobalt { color: var(--cobalt); }
+  .text-charcoal { color: var(--charcoal); }
+  .text-secondary { color: var(--text-secondary); }
+
+  .bg-cream { background-color: var(--cream); }
+  .bg-navy { background-color: var(--navy); }
+  .bg-emerald { background-color: var(--emerald); }
+  .bg-gold { background-color: var(--gold); }
+  .bg-cobalt { background-color: var(--cobalt); }
+  .bg-charcoal { background-color: var(--charcoal); }
+  .bg-surface { background-color: var(--surface); }
+
+  .border-cream { border-color: var(--border); }
+  .border-navy { border-color: var(--navy); }
+
+  .band-none { color: var(--text-secondary); }
+  .band-starter { color: var(--gold); }
+  .band-established { color: var(--cobalt); }
+  .band-trusted { color: var(--emerald); }
+
+  .dim-strong { color: var(--emerald); }
+  .dim-moderate { color: var(--cobalt); }
+  .dim-weak { color: var(--gold); }
+  .dim-unresolved { color: var(--text-secondary); }
+
+  .stamp {
+    display: inline-block;
+    border: 2px solid currentColor;
+    padding: 2px 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-size: 0.7rem;
+    font-family: "IBM Plex Mono", monospace;
+    transform: rotate(-1.5deg);
+  }
+}

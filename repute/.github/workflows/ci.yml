@@ -1,0 +1,131 @@
+name: Repute CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─── Python contract checks ─────────────────────────────────────────────
+  contract-checks:
+    name: Contract Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: pip install pytest
+
+      - name: Compile contracts (syntax check)
+        run: |
+          python -c "import ast; ast.parse(open('contracts/repute_profile.py').read()); print('repute_profile.py: syntax OK')"
+          python -c "import ast; ast.parse(open('contracts/repute_vault.py').read()); print('repute_vault.py: syntax OK')"
+        working-directory: repute
+
+      - name: Run preflight checks
+        run: python scripts/preflight.py
+        working-directory: repute
+
+      - name: Run contract unit tests
+        run: python -m pytest tests/contract/ -v
+        working-directory: repute
+
+  # ─── Node.js frontend checks ─────────────────────────────────────────────
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: repute
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: repute/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_PROFILE_CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000"
+          NEXT_PUBLIC_VAULT_CONTRACT_ADDRESS: "0x0000000000000000000000000000000000000000"
+
+  # ─── Network config assertions ───────────────────────────────────────────
+  network-guard:
+    name: Network Config
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: repute
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check chain ID is 61999
+        run: |
+          grep -q "61999" lib/genlayer/network.ts && echo "Chain ID 61999 found ✓"
+
+      - name: Check RPC is Studionet
+        run: |
+          grep -q "studio.genlayer.com/api" lib/genlayer/network.ts && echo "Studionet RPC found ✓"
+
+      - name: Check no forbidden chain IDs
+        run: |
+          if grep -r "61997\|studioDevnet\|Studio-dev" lib/ app/ contracts/ 2>/dev/null | grep -v "node_modules"; then
+            echo "ERROR: Found forbidden network references"
+            exit 1
+          fi
+          echo "No forbidden network references ✓"
+
+      - name: Check genlayer-js pinned exactly
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            const ver = pkg.dependencies['genlayer-js'];
+            if (ver !== '1.1.8') {
+              console.error('genlayer-js must be exactly 1.1.8, got:', ver);
+              process.exit(1);
+            }
+            console.log('genlayer-js pinned to 1.1.8 ✓');
+          "
+
+  # ─── Secret leak check ───────────────────────────────────────────────────
+  secret-check:
+    name: Secret Leak Check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: repute
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check no private keys in source
+        run: |
+          if grep -rn "PRIVATE_KEY\s*=\s*0x\|mnemonic\s*=\|seed_phrase\s*=" \
+            contracts/ lib/ app/ scripts/ \
+            --include="*.py" --include="*.ts" --include="*.tsx" \
+            2>/dev/null | grep -v "node_modules" | grep -v ".env.example"; then
+            echo "ERROR: Potential private key found in source"
+            exit 1
+          fi
+          echo "No private key leaks found ✓"
