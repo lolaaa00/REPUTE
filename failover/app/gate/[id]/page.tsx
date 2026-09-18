@@ -50,15 +50,6 @@ export function findReceiptOutcome(receipts: unknown[], actionHash: string): str
 
 export default function LiveGatePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  return <LiveGatePanel projectId={id} />;
-}
-
-/**
- * All of the gate's live read/write behavior, split out from the route
- * component so it can be exercised directly in tests without needing a
- * Suspense-capable renderer to unwrap Next's `params` promise.
- */
-export function LiveGatePanel({ projectId: id }: { projectId: string }) {
   const wallet = useWallet();
   const { state, run } = useTxLifecycle<{ status: "ok" }>();
   const [gateOpen, setGateOpen] = useState<boolean | null>(null);

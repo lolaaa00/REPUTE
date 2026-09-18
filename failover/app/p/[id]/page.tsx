@@ -52,20 +52,15 @@ export default async function ProjectDossierPage({
             Chain: {CHAIN_ID} | Registry: {FAILOVER_REGISTRY_ADDRESS}
           </p>
         </div>
-        <div role="alert" className="checksum-plate p-5 border-emergency-red/70 bg-emergency-red/10 space-y-2">
-          <p className="font-mono-label text-xs uppercase text-emergency-red font-bold">
-            Failed to load live data
-          </p>
-          <p className="font-mono-label text-xs text-cockpit-white/60">
-            Project <span className="text-cockpit-white">{id}</span> was not returned by the
-            canonical Studionet registry. This page does not fall back to demo fixtures.
-          </p>
-          <p className="text-cockpit-white/40 text-sm break-words">
-            {(err as Error)?.message ?? "Live registry read failed."}
-          </p>
-        </div>
-        <Link href={`/p/${id}`} className="font-mono-label text-xs uppercase text-avionics-blue underline">
-          Retry live read
+        <p className="font-mono-label text-xs text-cockpit-white/60">
+          Project <span className="text-cockpit-white">{id}</span> was not returned by the canonical
+          Studionet registry.
+        </p>
+        <p className="text-cockpit-white/40 text-sm break-words">
+          {(err as Error)?.message ?? "Live registry read failed."}
+        </p>
+        <Link href="/demo" className="font-mono-label text-xs uppercase text-avionics-blue underline">
+          Open fixture demo
         </Link>
       </div>
     );

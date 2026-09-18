@@ -28,7 +28,6 @@ export function SiteHeader() {
           <Link href="/projects" className="hover:text-cockpit-white">Projects</Link>
           <Link href="/new" className="hover:text-cockpit-white">Register</Link>
           <Link href="/incidents" className="hover:text-cockpit-white">Incidents</Link>
-          <Link href="/demo" className="text-caution-amber/80 hover:text-caution-amber">Demo</Link>
         </nav>
         <WalletButton wallet={wallet} />
       </div>
