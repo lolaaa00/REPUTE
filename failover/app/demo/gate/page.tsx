@@ -55,15 +55,16 @@ export default function DemoGatePage() {
 
       <div className="checksum-plate p-4 border-caution-amber/70 bg-caution-amber/10 space-y-1">
         <p className="font-mono-label text-xs uppercase text-caution-amber font-bold">
-          Demo Gate - fixture data only
+          ⚠ DEMO MODE — Fixture data only. No live contract interaction. Actions are simulated.
         </p>
         <p className="font-mono-label text-[11px] text-cockpit-white/50">
-          These receipts are simulated and are not on-chain.
+          These receipts are simulated from <code>lib/fixtures/demoProject.ts</code> and are not
+          on-chain. For live gate behavior use <code>/gate/[id]</code>.
         </p>
       </div>
 
       <div className="flex items-center justify-between flex-wrap gap-4">
-        <h1 className="font-condensed text-3xl font-bold uppercase">Execution Gate Demo</h1>
+        <h1 className="font-condensed text-3xl font-bold uppercase">[Demo Mode] Execution Gate</h1>
         <StatusAnnunciator status={project.status} />
       </div>
 

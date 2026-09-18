@@ -5,8 +5,8 @@ import type { Eip1193Provider } from "@/lib/wallet/types";
 function requireDeployed(): `0x${string}` {
   if (!isDeployed(FAILOVER_GATE_ADDRESS)) {
     throw new Error(
-      "FailoverGate is not yet deployed (no funded Studionet signer in this environment). " +
-        "Set NEXT_PUBLIC_FAILOVER_GATE_ADDRESS once deployed. See docs/DEPLOYMENT.md.",
+      "FailoverGate address is not configured or is malformed. " +
+        "Set NEXT_PUBLIC_FAILOVER_GATE_ADDRESS to a valid Studionet address. See docs/DEPLOYMENT.md.",
     );
   }
   return FAILOVER_GATE_ADDRESS;

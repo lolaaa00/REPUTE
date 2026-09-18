@@ -13,8 +13,8 @@ import type { ProjectRecord, ProjectStatus, SafetyFinding } from "./types";
 function requireDeployed(): `0x${string}` {
   if (!isDeployed(FAILOVER_REGISTRY_ADDRESS)) {
     throw new Error(
-      "FailoverRegistry is not yet deployed (no funded Studionet signer in this environment). " +
-        "Set NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS once deployed. See docs/DEPLOYMENT.md.",
+      "FailoverRegistry address is not configured or is malformed. " +
+        "Set NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS to a valid Studionet address. See docs/DEPLOYMENT.md.",
     );
   }
   return FAILOVER_REGISTRY_ADDRESS;
