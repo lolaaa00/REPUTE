@@ -8,21 +8,25 @@
 | Production URL | https://failover-black.vercel.app |
 | Alias | https://failover-lolaas-projects.vercel.app |
 | Build | Vercel deployment `dpl_B2cgZXb5rEf9pY5EnzZ8uZ7W7DZn` |
-| Mode | Demo/fixture mode (no contract addresses configured yet) |
-| Chain | Will target chain 61999 once contracts are deployed |
-| Demo route | https://failover-black.vercel.app/demo |
+| Mode | **Live mode** — both contract addresses configured |
+| Chain | GenLayer Studionet, chain 61999 |
+| RPC | https://studio.genlayer.com/api |
+| Registry | `0x2A858500C75fC3880BB87CCd2C30Fd4c1AdE0A1a` |
+| Gate | `0xD6fAA5b4EfA47393F92eA71787528C86F4bb736f` |
+| Demo route (fixtures only) | https://failover-black.vercel.app/demo |
 
-The frontend runs in **demo mode** until contract addresses are set. In demo mode an amber banner is shown on all `/p/[id]` and `/gate/[id]` pages; the `/demo` route provides the full SAFE → RESTRICTED → RECOVERY\_PENDING → SAFE walkthrough using canonical fixtures. Once real contract addresses are set via `NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS` and `NEXT_PUBLIC_FAILOVER_GATE_ADDRESS` in the Vercel dashboard, the frontend switches to live mode automatically.
+The frontend runs in **live mode**: `/projects`, `/incidents`, `/p/[id]`, `/p/[id]/check`, `/p/[id]/recovery` and `/gate/[id]` read the deployed contracts through `lib/contract/registryAdapter.ts` / `gateAdapter.ts`. A failed live read renders a visible "Failed to load live data" panel with a retry — production pages never fall back to `lib/fixtures/*`. The only fixture-backed routes are `/demo` and `/demo/gate`, which both carry a permanent amber **DEMO MODE** banner and provide the full SAFE → RESTRICTED → RECOVERY\_PENDING → SAFE walkthrough with no wallet or node required. `lib/contract/addresses.ts` compiles the deployed addresses in as defaults; `NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS` / `NEXT_PUBLIC_FAILOVER_GATE_ADDRESS` (set in the Vercel dashboard) override them.
 
-## Contract deployment status: NOT deployed
+## Contract deployment status: DEPLOYED
 
-**No funded Studionet signer has been used yet.** Neither
-`FailoverRegistry` nor `FailoverGate` has been deployed to chain 61999. No address, no
-transaction hash, and no deployment record anywhere in this repository should be read
-as evidence of a live deployment — none exists yet. `lib/contract/addresses.ts` has no
-real addresses configured, and every adapter call (`registryAdapter.ts`,
-`gateAdapter.ts`) throws a clear "not yet deployed" error until real addresses are set,
-by design, rather than silently falling back to fixture data.
+Both `FailoverRegistry` and `FailoverGate` are deployed to GenLayer Studionet (chain
+61999) with a funded signer. The full evidence — addresses, deployment transaction
+hashes, contract source SHA-256s, consensus status and validator votes — is in the
+[Live deployment record](#live-deployment-record) below. `lib/contract/addresses.ts`
+resolves to those addresses, and the adapters (`registryAdapter.ts`, `gateAdapter.ts`)
+read and write against them. An adapter still throws a clear configuration error rather
+than silently falling back to fixture data if an override env var is set to a malformed
+address.
 
 ## Canonical network (required for any deployment)
 
@@ -40,7 +44,7 @@ Verify this resolves correctly before any funded action:
 npm run check:network
 ```
 
-## Exact deployment steps (once a funded signer is available)
+## Exact deployment steps (as executed; reproducible for a fresh deployment)
 
 1. **Never commit a private key.** Set it only as an environment variable at
    invocation time:
@@ -62,7 +66,7 @@ npm run check:network
      `contracts/FailoverGate.py`, plus the current `git rev-parse HEAD`, so the exact
      reviewed source being deployed is unambiguous and reproducible;
    - exits early (without deploying anything) if no `FAILOVER_DEPLOYER_PRIVATE_KEY` is
-     set — this is the current state of this environment;
+     set;
    - once a key is present, deploys `FailoverRegistry.py` via `genlayer-js` 1.1.8's
      `createClient({ chain: studionet, account })` and prints the deployment tx.
 
