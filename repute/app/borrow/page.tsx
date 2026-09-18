@@ -16,6 +16,7 @@ import {
   getProfile,
   getProfileCreditBand,
   getReviewIsFresh,
+  getNextProfileId,
   BorrowerProfile,
 } from "@/lib/contract/profile";
 import { computeMaxLoan } from "@/lib/contract/vault";
@@ -108,6 +109,7 @@ export default function BorrowPage() {
       setFormError(parsed.error.errors[0]?.message ?? "Validation error");
       return;
     }
+    const prevNextId = await getNextProfileId(getProfileAddress()).catch(() => 1n);
     await sendCreate(async (client, setStatus) => {
       setStatus("SUBMITTED");
       const profAddr = getProfileAddress();
@@ -126,6 +128,18 @@ export default function BorrowPage() {
       setStatus("CONSENSUS_RUNNING");
       const receipt = await client.waitForTransactionReceipt({ hash });
       setStatus("FINALIZED");
+
+      // Postcondition: next_profile_id must have incremented
+      const newNextId = await getNextProfileId(profAddr).catch(() => prevNextId);
+      if (BigInt(newNextId) <= BigInt(prevNextId)) {
+        throw new Error("Postcondition failed: profile was not created on-chain");
+      }
+      // Postcondition: profile must be owned by this wallet
+      const pid = await getOperatorProfileId(profAddr, address!).catch(() => null);
+      if (pid == null) {
+        throw new Error("Postcondition failed: operator profile mapping not set");
+      }
+
       return { hash, result: receipt };
     });
   }
@@ -152,6 +166,14 @@ export default function BorrowPage() {
         setStatus("CONSENSUS_RUNNING");
         const receipt = await client.waitForTransactionReceipt({ hash });
         setStatus("FINALIZED");
+
+        // Postcondition: active loan must exist for this profile
+        const { getActiveLoanId } = await import("@/lib/contract/vault");
+        const loanId = await getActiveLoanId(vaultAddr, BigInt(profile.profile_id)).catch(() => null);
+        if (loanId == null) {
+          throw new Error("Postcondition failed: no active loan found after borrow");
+        }
+
         return { hash, result: receipt };
       });
     } catch (err) {

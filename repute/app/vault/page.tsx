@@ -56,6 +56,7 @@ export default function VaultPage() {
         setWithdrawError(`Amount exceeds your deposit: ${formatGen(lpBalance)} GEN`);
         return;
       }
+      const balanceBefore = lpBalance;
       await sendWithdraw(async (client, setStatus) => {
         setStatus("SUBMITTED");
         const vaultAddr = getVaultAddress();
@@ -68,6 +69,15 @@ export default function VaultPage() {
         setStatus("CONSENSUS_RUNNING");
         const receipt = await client.waitForTransactionReceipt({ hash });
         setStatus("FINALIZED");
+
+        // Postcondition: LP balance must have decreased by withdrawn amount
+        if (address) {
+          const newBalance = await getLpBalance(vaultAddr, address).catch(() => balanceBefore);
+          if (BigInt(newBalance) >= BigInt(balanceBefore)) {
+            throw new Error("Postcondition failed: LP balance did not decrease after withdrawal");
+          }
+        }
+
         return { hash, result: receipt };
       });
     } catch (err) {
@@ -83,6 +93,7 @@ export default function VaultPage() {
         setDepositError("Enter a positive amount");
         return;
       }
+      const balanceBefore = lpBalance;
       await send(async (client, setStatus) => {
         setStatus("SUBMITTED");
         const vaultAddr = getVaultAddress();
@@ -95,6 +106,15 @@ export default function VaultPage() {
         setStatus("CONSENSUS_RUNNING");
         const receipt = await client.waitForTransactionReceipt({ hash });
         setStatus("FINALIZED");
+
+        // Postcondition: LP balance must have increased
+        if (address) {
+          const newBalance = await getLpBalance(vaultAddr, address).catch(() => balanceBefore);
+          if (BigInt(newBalance) <= BigInt(balanceBefore)) {
+            throw new Error("Postcondition failed: LP balance did not increase after deposit");
+          }
+        }
+
         return { hash, result: receipt };
       });
     } catch (err) {

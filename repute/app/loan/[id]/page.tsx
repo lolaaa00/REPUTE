@@ -52,6 +52,13 @@ export default function LoanPage() {
       setStatus("CONSENSUS_RUNNING");
       const receipt = await client.waitForTransactionReceipt({ hash });
       setStatus("FINALIZED");
+
+      // Postcondition: loan status must be REPAID
+      const updated = await getLoan(vaultAddr, BigInt(loan.loan_id)).catch(() => null);
+      if (!updated || updated.status !== "REPAID") {
+        throw new Error("Postcondition failed: loan status is not REPAID after repayment");
+      }
+
       return { hash, result: receipt };
     });
   }
@@ -70,6 +77,13 @@ export default function LoanPage() {
       setStatus("CONSENSUS_RUNNING");
       const receipt = await client.waitForTransactionReceipt({ hash });
       setStatus("FINALIZED");
+
+      // Postcondition: loan status must be DEFAULTED
+      const updated = await getLoan(vaultAddr, BigInt(loan.loan_id)).catch(() => null);
+      if (!updated || updated.status !== "DEFAULTED") {
+        throw new Error("Postcondition failed: loan status is not DEFAULTED after mark_default");
+      }
+
       return { hash, result: receipt };
     });
   }
