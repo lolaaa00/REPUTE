@@ -53,7 +53,7 @@ lib/genlayer/         Network module (canonical 61999 config), client, explorer 
 lib/contract/         Registry/gate adapters, shared types, BigInt-safe GEN helpers, tx lifecycle
 lib/wallet/           Wallet context/provider, EIP-1193 types
 lib/validation/       URL hardening, Zod form schemas
-lib/fixtures/         Canonical static demo fixtures — used by /demo routes ONLY, never in production pages
+lib/fixtures/         Canonical static demo fixtures (SAFE -> RESTRICTED -> RECOVERY_PENDING -> SAFE)
 tests/contract/       Python unit + protocol tests (no live network)
 tests/frontend/       Vitest unit tests (wallet, tx lifecycle)
 scripts/              contract_static_checks.py, check-network.ts, deploy.ts, live-studionet-smoke.ts
@@ -98,37 +98,19 @@ python3 -m pytest tests/contract/ -v         # contract unit + protocol tests
 python3 scripts/contract_static_checks.py    # Depends-hash / stable-runtime / no-secret preflight
 ```
 
-## Deployment status: LIVE on Studionet
+## Deployment status
 
-Both Intelligent Contracts are deployed to GenLayer Studionet (chain 61999) and the
-frontend reads them directly. Full evidence — deployment transactions, consensus status,
-validator votes, contract source SHA-256s — is recorded in `docs/DEPLOYMENT.md`.
-
-| Contract | Address |
-|----------|---------|
-| `FailoverRegistry` | `0x2A858500C75fC3880BB87CCd2C30Fd4c1AdE0A1a` |
-| `FailoverGate` (bound to project `failover-demo`) | `0xD6fAA5b4EfA47393F92eA71787528C86F4bb736f` |
-
-These are compiled in as defaults in `lib/contract/addresses.ts`;
-`NEXT_PUBLIC_FAILOVER_REGISTRY_ADDRESS` / `NEXT_PUBLIC_FAILOVER_GATE_ADDRESS` override
-them for a reviewer pointing at their own deployment.
-
-## Live vs demo data
-
-Every production route reads live contract state only:
-
-- `/projects`, `/incidents`, `/p/[id]`, `/p/[id]/check`, `/p/[id]/recovery`, `/gate/[id]`
-  read the deployed `FailoverRegistry` / `FailoverGate`. If a live read fails they render
-  a visible "Failed to load live data" error with a retry — they **never** fall back to
-  fixture data.
-- `/demo` and `/demo/gate` are the only fixture-backed routes. Both carry a permanent
-  amber **DEMO MODE** banner and use `lib/fixtures/demoProject.ts`.
+**No funded Studionet signer is available in this build environment.** `contracts/`,
+`scripts/deploy.ts`, and the frontend adapters are complete and ready to run against a
+live deployment, but no contract has actually been deployed, and no address or
+transaction hash in this repository should be read as live deployment evidence. See
+`docs/DEPLOYMENT.md` for exact steps and the evidence a real deployment must record.
 
 ## Reviewer walkthrough
 
-`docs/REVIEWER_DEMO.md` walks the live Studionet lifecycle (`PENDING_FIRST_CHECK -> SAFE
--> RESTRICTED -> RECOVERY_PENDING -> RECOVERED -> SAFE`) against the deployed contracts,
-and points at `/demo` for the same lifecycle as a no-wallet fixture walkthrough.
+`docs/REVIEWER_DEMO.md` walks the full lifecycle (`SAFE -> RESTRICTED ->
+RECOVERY_PENDING -> SAFE`) using the canonical static demo fixtures in
+`lib/fixtures/demoProject.ts`, without requiring a live GenLayer node or funded wallet.
 
 ## Further reading
 
