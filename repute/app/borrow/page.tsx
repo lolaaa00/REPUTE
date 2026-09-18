@@ -30,13 +30,12 @@ export default function BorrowPage() {
   const { address } = useWallet();
   const [profile, setProfile] = useState<BorrowerProfile | null>(null);
   const [band, setBand] = useState<CreditBand>("NONE");
-  const [fresh, setFresh] = useState(false);
   const [step, setStep] = useState<Step | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
 
   const { tx: createTx, send: sendCreate, reset: resetCreate } = useTx(address);
   const { tx: borrowTx, send: sendBorrow, reset: resetBorrow } = useTx(address, {
-    onSuccess: (hash) => {
+    onSuccess: (_hash) => {
       router.push(`/me`);
     },
   });
@@ -44,6 +43,7 @@ export default function BorrowPage() {
   // Profile form state
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
+  const [proofUrl, setProofUrl] = useState("");
   const [sources, setSources] = useState([
     { url: "", label: "" },
     { url: "", label: "" },
@@ -69,7 +69,7 @@ export default function BorrowPage() {
           getReviewIsFresh(profAddr, pid),
         ]);
         setBand(b);
-        setFresh(f);
+
         if (!p.has_review || !f) {
           setStep("REVIEW_NEEDED");
         } else {
@@ -119,6 +119,7 @@ export default function BorrowPage() {
           description,
           sources.filter(s => s.url).map(s => s.url),
           sources.filter(s => s.url).map(s => s.label),
+          proofUrl,
         ],
         value: 0n,
       });
@@ -208,6 +209,18 @@ export default function BorrowPage() {
               maxLength={512}
               aria-label="Project description"
             />
+
+            <Label>Ownership Proof URL</Label>
+            <input
+              style={inputStyle}
+              value={proofUrl}
+              onChange={e => setProofUrl(e.target.value)}
+              placeholder="https://yourdomain.com/.well-known/repute-proof"
+              aria-label="Ownership proof URL"
+            />
+            <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: -8, marginBottom: 8 }}>
+              A URL on one of your source domains containing your wallet address and project name. Example: a GitHub file at <code>https://github.com/you/repo/blob/main/.repute-proof</code>
+            </p>
 
             <Label>Sources (2–4, HTTPS, independent domains)</Label>
             {sources.map((src, i) => (

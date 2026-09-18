@@ -14,9 +14,16 @@ export default function VaultPage() {
   const [lpBalance, setLpBalance] = useState<bigint>(0n);
   const [depositStr, setDepositStr] = useState("");
   const [depositError, setDepositError] = useState<string | null>(null);
+  const [withdrawStr, setWithdrawStr] = useState("");
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const { tx, send, reset } = useTx(address, {
+    onSuccess: async () => {
+      await loadStats();
+    },
+  });
+  const { tx: wTx, send: sendWithdraw, reset: resetWithdraw } = useTx(address, {
     onSuccess: async () => {
       await loadStats();
     },
@@ -36,6 +43,37 @@ export default function VaultPage() {
     setLoading(true);
     loadStats().finally(() => setLoading(false));
   }, [address]);
+
+  async function handleWithdraw() {
+    setWithdrawError(null);
+    try {
+      const amount = parseGen(withdrawStr);
+      if (amount <= 0n) {
+        setWithdrawError("Enter a positive amount");
+        return;
+      }
+      if (amount > lpBalance) {
+        setWithdrawError(`Amount exceeds your deposit: ${formatGen(lpBalance)} GEN`);
+        return;
+      }
+      await sendWithdraw(async (client, setStatus) => {
+        setStatus("SUBMITTED");
+        const vaultAddr = getVaultAddress();
+        const hash = await client.writeContract({
+          address: vaultAddr,
+          functionName: "withdraw_liquidity",
+          args: [amount],
+          value: 0n,
+        });
+        setStatus("CONSENSUS_RUNNING");
+        const receipt = await client.waitForTransactionReceipt({ hash });
+        setStatus("FINALIZED");
+        return { hash, result: receipt };
+      });
+    } catch (err) {
+      setWithdrawError(err instanceof Error ? err.message : "Invalid amount");
+    }
+  }
 
   async function handleDeposit() {
     setDepositError(null);
@@ -262,6 +300,89 @@ export default function VaultPage() {
 
         <TxPanel tx={tx} onDismiss={reset} />
       </div>
+
+      {/* Withdrawal panel — only show if LP has a balance */}
+      {address && lpBalance > 0n && (
+        <div
+          style={{
+            border: "1px solid var(--border)",
+            borderRadius: 10,
+            padding: "28px",
+            background: "var(--surface-raised)",
+            maxWidth: 440,
+            marginTop: 24,
+          }}
+        >
+          <h2
+            style={{
+              fontFamily: "'DM Serif Display', serif",
+              fontSize: "1.3rem",
+              color: "var(--navy)",
+              marginBottom: 6,
+            }}
+          >
+            Withdraw Liquidity
+          </h2>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginBottom: 12 }}>
+            Your deposit: <strong>{formatGen(lpBalance)} GEN</strong>. Withdrawal limited to available vault liquidity.
+          </p>
+
+          <label
+            style={{
+              display: "block",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "var(--charcoal)",
+              marginBottom: 6,
+            }}
+          >
+            Amount (GEN)
+          </label>
+          <input
+            style={{
+              width: "100%",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "10px 14px",
+              fontSize: "0.9rem",
+              color: "var(--navy)",
+              fontFamily: "inherit",
+              background: "var(--surface)",
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+            value={withdrawStr}
+            onChange={e => setWithdrawStr(e.target.value)}
+            placeholder={`Max ${formatGen(lpBalance)}`}
+            aria-label="Withdrawal amount in GEN"
+          />
+
+          {withdrawError && (
+            <p style={{ color: "var(--gold)", fontSize: "0.82rem", marginTop: 6 }}>{withdrawError}</p>
+          )}
+
+          <button
+            onClick={handleWithdraw}
+            disabled={wTx.status !== "IDLE"}
+            style={{
+              width: "100%",
+              marginTop: 16,
+              background: "var(--surface)",
+              color: "var(--navy)",
+              border: "1.5px solid var(--navy)",
+              borderRadius: 7,
+              padding: "13px",
+              fontSize: "0.95rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Withdraw
+          </button>
+          <TxPanel tx={wTx} onDismiss={resetWithdraw} />
+        </div>
+      )}
     </div>
   );
 }

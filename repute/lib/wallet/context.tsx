@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { validateChain, switchToStudionet } from "@/lib/genlayer/client";
+import { switchToStudionet } from "@/lib/genlayer/client";
 import { STUDIONET_CHAIN_ID } from "@/lib/genlayer/network";
 
 interface WalletState {

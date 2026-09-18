@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useWallet } from "@/lib/wallet/context";
 import { WalletButton } from "@/components/wallet/WalletButton";
 
 export function NavBar() {

@@ -49,6 +49,10 @@ class BorrowerProfile:
     project_name: str
     description: str
     sources: DynArray[Source]
+    # proof_url: HTTPS URL that serves a file containing the operator wallet
+    # address and project name, proving project-controlled ownership.
+    # Must be hosted on the same domain as one of the declared sources.
+    proof_url: str
     created_at: u256
     sealed_hash: str
     sealed: bool
@@ -102,6 +106,7 @@ class ReputeProfile(gl.Contract):
         """One-time: deployer binds the authorized vault address."""
         assert gl.message.sender == self.deployer, "only deployer"
         assert str(self.vault_address) == ZERO_ADDRESS, "vault already set"
+        assert str(vault) != ZERO_ADDRESS, "vault cannot be zero address"
         self.vault_address = vault
 
     @gl.public.view
@@ -133,7 +138,7 @@ class ReputeProfile(gl.Contract):
         return without_scheme[:slash].lower()
 
     def _seal_hash(self, profile: BorrowerProfile) -> str:
-        parts = [profile.project_name, profile.description]
+        parts = [profile.project_name, profile.description, profile.proof_url]
         for s in profile.sources:
             parts.append(s.url)
             parts.append(s.label)
@@ -233,13 +238,21 @@ class ReputeProfile(gl.Contract):
         description: str,
         source_urls: DynArray[str],
         source_labels: DynArray[str],
+        proof_url: str,
     ) -> u256:
+        """
+        proof_url: an HTTPS URL hosted on the same domain as one of the declared
+        sources. The page must contain both the operator wallet address and the
+        project name. This is independently fetched by validators to prove that
+        the operator controls the project infrastructure.
+        """
         caller = gl.message.sender
         assert caller not in self.operator_profile, "profile exists"
         assert MIN_SOURCES <= len(source_urls) <= MAX_SOURCES, "source count out of range"
         assert len(source_urls) == len(source_labels), "url/label mismatch"
         assert 1 <= len(project_name) <= MAX_NAME_LEN, "name length invalid"
         assert 1 <= len(description) <= MAX_DESC_LEN, "desc length invalid"
+        assert self._validate_url(proof_url), "invalid proof_url"
 
         sources: DynArray[Source] = DynArray()
         seen_domains: DynArray[str] = DynArray()
@@ -252,6 +265,14 @@ class ReputeProfile(gl.Contract):
             seen_domains.append(domain)
             sources.append(Source(url=url, label=source_labels[i]))
 
+        # proof_url must be on one of the declared source domains
+        proof_domain = self._canonical_domain(proof_url)
+        domain_match = False
+        for d in seen_domains:
+            if d == proof_domain:
+                domain_match = True
+        assert domain_match, "proof_url domain not in declared sources"
+
         pid = self.next_profile_id
         self.next_profile_id = u256(int(pid) + 1)
 
@@ -262,6 +283,7 @@ class ReputeProfile(gl.Contract):
             project_name=project_name,
             description=description,
             sources=sources,
+            proof_url=proof_url,
             created_at=now,
             sealed_hash="",
             sealed=False,
@@ -292,7 +314,7 @@ class ReputeProfile(gl.Contract):
             source_list.append({"id": i + 1, "url": src.url, "label": src.label})
 
         operator_addr = str(p.operator)
-        review_id = self._run_operational_review(profile_id, p, source_list, operator_addr)
+        review_id = self._run_operational_review(profile_id, p, source_list, operator_addr, p.proof_url)
         return review_id
 
     def _run_operational_review(
@@ -301,9 +323,10 @@ class ReputeProfile(gl.Contract):
         profile: BorrowerProfile,
         source_list: list,
         operator_addr: str,
+        proof_url: str,
     ) -> u256:
         def leader_fn():
-            findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr)
+            findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr, proof_url)
             return findings
 
         def validator_fn(leader_result) -> bool:
@@ -314,7 +337,7 @@ class ReputeProfile(gl.Contract):
                 return False
 
             # Independent fetch and evaluation
-            my_findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr)
+            my_findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr, proof_url)
             if not _valid_review_shape(my_findings):
                 return False
 
@@ -422,15 +445,30 @@ class ReputeProfile(gl.Contract):
 # Non-deterministic helpers
 # ────────────────────────────────────────────────────────────────────────────
 
-def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str) -> dict:
+def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str, proof_url: str) -> dict:
     """
-    Independently fetch all sources and evaluate operational dimensions.
-    Also checks that at least one source contains the operator wallet address
-    for ownership attribution grounding.
+    Independently fetch proof URL and all sources. Evaluate operational dimensions.
+
+    Ownership is proven ONLY if the designated proof_url (on an operator-controlled
+    domain) returns content containing both the operator wallet address AND the
+    project name. This prevents an attacker from injecting their wallet into an
+    unrelated third-party page.
     """
     fetched = []
     ownership_proven = False
     operator_lower = operator_addr.lower()
+    project_lower = project_name.lower()
+
+    # Fetch the designated proof URL first — this is the authoritative ownership check
+    try:
+        proof_content = gl.nondet.web.get(proof_url, max_bytes=4096)
+        if proof_content:
+            proof_lower = proof_content.lower()
+            # Both wallet AND project name must appear in the proof document
+            if operator_lower in proof_lower and project_lower in proof_lower:
+                ownership_proven = True
+    except Exception:
+        pass
 
     for src in source_list:
         url = src["url"]
@@ -445,13 +483,13 @@ def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str
                     "url": url,
                     "content": content_trunc,
                 })
-                # Ownership proof: wallet address appears in at least one source
-                if operator_lower in content_trunc.lower():
-                    ownership_proven = True
             else:
                 fetched.append({"source_id": src["id"], "label": label, "url": url, "content": ""})
         except Exception:
             fetched.append({"source_id": src["id"], "label": label, "url": url, "content": ""})
+
+    # Map source_id → fetched content for excerpt grounding
+    source_content_map = {s["source_id"]: s["content"] for s in fetched}
 
     sources_text = "\n\n---\n\n".join(
         f"[Source {s['source_id']}] {s['label']} ({s['url']})\n{s['content']}"
@@ -459,11 +497,13 @@ def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str
     )
 
     ownership_note = (
-        f"OWNERSHIP BINDING: The operator wallet address {operator_addr} WAS found in at least one source. "
+        f"OWNERSHIP BINDING: The designated proof URL was successfully fetched and contains both "
+        f"the operator wallet {operator_addr} and the project name '{project_name}'. "
         "Attribution may be MODERATE or STRONG if other evidence supports it."
         if ownership_proven else
-        f"OWNERSHIP BINDING: The operator wallet address {operator_addr} was NOT found in any source. "
-        "Attribution MUST be UNRESOLVED — the operator has not proven they control this project."
+        f"OWNERSHIP BINDING: The designated proof URL did NOT contain both the operator wallet "
+        f"{operator_addr} and the project name '{project_name}'. "
+        "Attribution MUST be UNRESOLVED regardless of any other signals."
     )
 
     prompt = f"""You are an independent operational evidence analyst. Analyze the following publicly fetched content about project "{project_name}".
@@ -530,6 +570,24 @@ Sources fetched:
     if not ownership_proven:
         result["attribution"] = "UNRESOLVED"
 
+    # Ground evidence: remove any evidence item whose excerpt cannot be
+    # found verbatim (case-insensitive) in the fetched source content.
+    # This prevents fabricated evidence from persisting in the record.
+    grounded_evidence = []
+    raw_evidence = result.get("evidence", [])
+    if isinstance(raw_evidence, list):
+        for ev in raw_evidence:
+            if not isinstance(ev, dict):
+                continue
+            src_id = ev.get("source_id")
+            excerpt = ev.get("excerpt", "")
+            if not isinstance(excerpt, str) or len(excerpt) < 20:
+                continue
+            src_content = source_content_map.get(src_id, "")
+            if excerpt.lower() in src_content.lower():
+                grounded_evidence.append(ev)
+
+    result["evidence"] = grounded_evidence
     return result
 
 

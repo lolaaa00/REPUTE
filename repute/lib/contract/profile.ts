@@ -11,6 +11,7 @@ export interface BorrowerProfile {
   project_name: string;
   description: string;
   sources: Source[];
+  proof_url: string;
   created_at: string;
   sealed_hash: string;
   sealed: boolean;

@@ -57,13 +57,23 @@ No external calls happen before state updates.
 
 - `create_profile`: one profile per wallet address
 - `request_operational_review`: only the profile operator
-- `record_repayment` / `record_default`: callable by anyone (Vault calls these)
+- `record_repayment` / `record_default`: **vault-only** — caller must match the immutable `vault_address` stored in Profile; deployer sets this once via `set_vault` (one-time, rejects zero address)
+- `set_vault`: deployer-only, one-time, rejects zero address
 - `borrow`: verifies operator_profile mapping to prevent cross-profile borrowing
 - `repay`: only the loan borrower
 - `mark_default`: permissionless, callable by anyone after `due_at`
+- `withdraw_liquidity`: only the LP whose balance it is; subject to available liquidity
+
+## Ownership binding
+
+`create_profile` requires a `proof_url` on the same domain as one of the declared sources. During operational review, the GenVM independently fetches that URL and verifies that both the operator wallet address and project name appear in its content. If either is absent, `attribution` is forced to `UNRESOLVED`, which yields `NONE` credit band. This prevents an attacker from claiming ownership by injecting their wallet address into a third-party page.
+
+## Default accounting
+
+On default, the vault absorbs the net shortfall (`principal − collateral`) as a reduction to `total_liquidity`, so the available-liquidity invariant stays consistent with the actual vault balance. LP balances are pro-rated against this reduced pool; later withdrawals are bounded by actual available funds.
 
 ## No admin control
 
-There is no admin, owner, or privileged role in either contract.
+There is no admin, owner, or privileged role in either contract after `set_vault` is called.
 `mark_default` is permissionless (no caller reward).
 The vault cannot be paused by any party.

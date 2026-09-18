@@ -9,7 +9,6 @@ import { NetworkGuard } from "@/components/ui/NetworkGuard";
 import { getLoan, LoanRecord } from "@/lib/contract/vault";
 import { getVaultAddress } from "@/lib/contract/addresses";
 import { formatGen } from "@/lib/genlayer/gen";
-import { explorerAddress } from "@/lib/genlayer/network";
 
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "var(--cobalt)",

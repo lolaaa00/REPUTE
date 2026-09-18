@@ -79,12 +79,16 @@ class ReputeVault(gl.Contract):
     loan_history: TreeMap[u256, DynArray[u256]]
 
     # Vault accounting
-    total_liquidity: u256      # total GEN deposited by LPs
-    reserved_liquidity: u256   # principal currently lent out
-    total_collateral: u256     # collateral currently held
-    repaid_principal: u256     # cumulative repaid principal
+    # total_liquidity: sum of LP deposits, reduced by net default losses
+    total_liquidity: u256
+    # reserved_liquidity: principal currently lent out
+    reserved_liquidity: u256
+    # total_collateral: borrower collateral currently held
+    total_collateral: u256
+    # repaid_principal: cumulative principal repaid
+    repaid_principal: u256
 
-    # LP deposits
+    # LP deposits (nominal balance per provider)
     lp_deposits: TreeMap[Address, u256]
     lp_list: DynArray[Address]
 
@@ -114,18 +118,16 @@ class ReputeVault(gl.Contract):
         mult = self._band_multiplier(band)
         if mult == 0:
             return 0
-        # max_loan = collateral * mult / 100
         return (collateral * mult) // 100
 
     def _available_liquidity(self) -> int:
         total = int(self.total_liquidity)
         reserved = int(self.reserved_liquidity)
         collat = int(self.total_collateral)
-        # Available = total deposited + collateral held - reserved
+        # LP-attributable funds + collateral held - principal lent out
         return total + collat - reserved
 
     def _conservation_check(self):
-        # outflows (reserved) + available must == total_liquidity + total_collateral
         avail = self._available_liquidity()
         assert avail >= 0, "conservation violated"
 
@@ -154,7 +156,7 @@ class ReputeVault(gl.Contract):
 
     @gl.public.view
     def compute_max_loan(self, profile_id: u256, collateral_amount: u256) -> u256:
-        band = self._profile().profile_credit_band(profile_id)
+        band = self._profile().profile_credit_band(args=[profile_id])
         return u256(self._max_loan(int(collateral_amount), band))
 
     # ── LP deposit ──────────────────────────────────────────────────────────
@@ -177,6 +179,29 @@ class ReputeVault(gl.Contract):
     def get_lp_balance(self, provider: Address) -> u256:
         return self.lp_deposits.get(provider, u256(0))
 
+    # ── LP withdrawal ───────────────────────────────────────────────────────
+
+    @gl.public.write
+    def withdraw_liquidity(self, amount: u256):
+        """LP withdraws their nominal deposit balance, subject to available liquidity."""
+        caller = gl.message.sender
+        amount_int = int(amount)
+        assert amount_int > 0, "amount must be positive"
+
+        current = int(self.lp_deposits.get(caller, u256(0)))
+        assert current >= amount_int, "insufficient lp balance"
+
+        avail = self._available_liquidity()
+        assert amount_int <= avail, "insufficient vault liquidity"
+
+        # Update-before-transfer
+        self.lp_deposits[caller] = u256(current - amount_int)
+        self.total_liquidity = u256(int(self.total_liquidity) - amount_int)
+
+        self._conservation_check()
+
+        caller.transfer(amount_int)
+
     # ── borrow flow ─────────────────────────────────────────────────────────
 
     @gl.public.write
@@ -194,14 +219,15 @@ class ReputeVault(gl.Contract):
         assert principal_int > 0, "principal must be positive"
 
         # Verify caller owns profile
-        operator_pid = self._profile().get_operator_profile_id(caller)
+        operator_pid = self._profile().get_operator_profile_id(args=[caller])
         assert int(operator_pid) == int(profile_id), "not profile owner"
 
         # Verify review is fresh
-        assert self._profile().review_is_fresh(profile_id), "review stale or missing"
+        fresh = self._profile().review_is_fresh(args=[profile_id])
+        assert fresh, "review stale or missing"
 
         # Read credit band
-        band = self._profile().profile_credit_band(profile_id)
+        band = self._profile().profile_credit_band(args=[profile_id])
         assert band != "NONE", "credit band NONE: not eligible"
 
         # Compute max loan for this collateral
@@ -295,8 +321,8 @@ class ReputeVault(gl.Contract):
 
         self._conservation_check()
 
-        # Record repayment on profile
-        self._profile().record_repayment(profile_id)
+        # Record repayment on profile (cross-contract write)
+        self._profile().record_repayment(args=[profile_id])
 
         # Return collateral to borrower
         caller.transfer(collateral_int)
@@ -324,38 +350,29 @@ class ReputeVault(gl.Contract):
         principal_int = int(loan.principal)
         collateral_int = int(loan.collateral)
 
-        # Apply collateral against loss — collateral stays in vault
-        # reserved_liquidity decreases by principal (the loss is covered partially by collateral)
+        # Default accounting:
+        # - The principal was lent out (not in vault). reserved_liquidity decreases.
+        # - The collateral is already in the vault. total_collateral decreases.
+        # - The LP pool absorbs the net shortfall: principal - collateral.
+        # - total_liquidity decreases by the net loss so available_liquidity
+        #   stays consistent with the actual vault balance.
+        #
+        # Example: LP deposited 10, borrower posted 2 collateral, borrowed 2.5
+        # Actual vault balance after default = 9.5
+        # reserved_liquidity -= 2.5 → 0
+        # total_collateral -= 2 → 0
+        # net_loss = 2.5 - 2 = 0.5
+        # total_liquidity -= 0.5 → 9.5
+        # available = 9.5 + 0 - 0 = 9.5 ✓
+
+        net_loss = principal_int - collateral_int
         self.reserved_liquidity = u256(int(self.reserved_liquidity) - principal_int)
-        # Collateral is now converted to vault liquidity (penalty)
         self.total_collateral = u256(int(self.total_collateral) - collateral_int)
-        self.total_liquidity = u256(int(self.total_liquidity) + collateral_int)
+        if net_loss > 0:
+            liq = int(self.total_liquidity)
+            self.total_liquidity = u256(max(0, liq - net_loss))
 
         self._conservation_check()
 
-        # Record default on profile
-        self._profile().record_default(profile_id)
-        # No caller reward
-
-    # ── LP withdrawal ───────────────────────────────────────────────────────
-
-    @gl.public.write
-    def withdraw_liquidity(self, amount: u256):
-        """LP withdraws their deposited GEN, up to available liquidity."""
-        caller = gl.message.sender
-        amount_int = int(amount)
-        assert amount_int > 0, "amount must be positive"
-
-        current = int(self.lp_deposits.get(caller, u256(0)))
-        assert current >= amount_int, "insufficient lp balance"
-
-        avail = self._available_liquidity()
-        assert amount_int <= avail, "insufficient vault liquidity"
-
-        # Update-before-transfer
-        self.lp_deposits[caller] = u256(current - amount_int)
-        self.total_liquidity = u256(int(self.total_liquidity) - amount_int)
-
-        self._conservation_check()
-
-        caller.transfer(amount_int)
+        # Record default on profile (cross-contract write)
+        self._profile().record_default(args=[profile_id])

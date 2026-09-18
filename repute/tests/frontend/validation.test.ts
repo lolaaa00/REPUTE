@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CreateProfileSchema, BorrowSchema, DepositSchema } from "@/lib/validation/schemas";
+import { CreateProfileSchema, BorrowSchema } from "@/lib/validation/schemas";
 
 describe("CreateProfileSchema", () => {
   const validProfile = {
