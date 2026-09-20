@@ -144,50 +144,76 @@ def main():
 
     def consensus_ok(receipt):
         result = receipt.get("result_name") or receipt.get("status_name") or ""
-        return str(result) in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED")
+        if str(result) not in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED"):
+            return False
+        # Also check that the leader actually executed without error
+        leader = (receipt.get("consensus_data") or {}).get("leader_receipt") or []
+        if leader and leader[0].get("execution_result") == "ERROR":
+            return False
+        return True
 
-    # ── 1. Deploy Profile ────────────────────────────────────────────────────
-    print("\n[Deploy] Deploying ReputeProfile…")
-    profile_code = PROFILE_CONTRACT.read_bytes()
-    profile_tx_hash = client.deploy_contract(code=profile_code, args=[])
-    print(f"  tx: {profile_tx_hash}")
-    profile_receipt = client.wait_for_transaction_receipt(profile_tx_hash, retries=30, interval=5000)
-    profile_address = extract_address(profile_receipt, profile_tx_hash)
-    profile_result = profile_receipt.get("result_name") or profile_receipt.get("status_name")
-    print(f"  address : {profile_address}")
-    print(f"  result  : {profile_result}")
-    if not consensus_ok(profile_receipt):
-        print(f"ERROR: Profile deployment did not reach consensus: {profile_result}")
-        sys.exit(1)
+    # ── 1. Deploy Profile (skippable if already deployed) ───────────────────
+    existing_profile = os.environ.get("REPUTE_PROFILE_ADDRESS", "").strip()
+    if existing_profile:
+        profile_address = existing_profile
+        profile_tx_hash = "skipped"
+        profile_result = "SKIPPED"
+        print(f"\n[Deploy] Using existing Profile: {profile_address}")
+    else:
+        print("\n[Deploy] Deploying ReputeProfile…")
+        profile_code = PROFILE_CONTRACT.read_bytes()
+        profile_tx_hash = client.deploy_contract(code=profile_code, args=[])
+        print(f"  tx: {profile_tx_hash}")
+        profile_receipt = client.wait_for_transaction_receipt(profile_tx_hash, retries=30, interval=5000)
+        profile_address = extract_address(profile_receipt, profile_tx_hash)
+        profile_result = profile_receipt.get("result_name") or profile_receipt.get("status_name")
+        print(f"  address : {profile_address}")
+        print(f"  result  : {profile_result}")
+        if not consensus_ok(profile_receipt):
+            print(f"ERROR: Profile deployment did not reach consensus: {profile_result}")
+            sys.exit(1)
 
-    # ── 2. Deploy Vault ──────────────────────────────────────────────────────
-    print("\n[Deploy] Deploying ReputeVault…")
-    vault_code = VAULT_CONTRACT.read_bytes()
-    vault_tx_hash = client.deploy_contract(code=vault_code, args=[profile_address])
-    print(f"  tx: {vault_tx_hash}")
-    vault_receipt = client.wait_for_transaction_receipt(vault_tx_hash, retries=30, interval=5000)
-    vault_address = extract_address(vault_receipt, vault_tx_hash)
-    vault_result = vault_receipt.get("result_name") or vault_receipt.get("status_name")
-    print(f"  address : {vault_address}")
-    print(f"  result  : {vault_result}")
-    if not consensus_ok(vault_receipt):
-        print(f"ERROR: Vault deployment did not reach consensus: {vault_result}")
-        sys.exit(1)
+    # ── 2. Deploy Vault (skippable if already deployed) ─────────────────────
+    existing_vault = os.environ.get("REPUTE_VAULT_ADDRESS", "").strip()
+    if existing_vault:
+        vault_address = existing_vault
+        vault_tx_hash = "skipped"
+        vault_result = "SKIPPED"
+        print(f"\n[Deploy] Using existing Vault: {vault_address}")
+    else:
+        print("\n[Deploy] Deploying ReputeVault…")
+        vault_code = VAULT_CONTRACT.read_bytes()
+        vault_tx_hash = client.deploy_contract(code=vault_code, args=[profile_address])
+        print(f"  tx: {vault_tx_hash}")
+        vault_receipt = client.wait_for_transaction_receipt(vault_tx_hash, retries=30, interval=5000)
+        vault_address = extract_address(vault_receipt, vault_tx_hash)
+        vault_result = vault_receipt.get("result_name") or vault_receipt.get("status_name")
+        print(f"  address : {vault_address}")
+        print(f"  result  : {vault_result}")
+        if not consensus_ok(vault_receipt):
+            print(f"ERROR: Vault deployment did not reach consensus: {vault_result}")
+            sys.exit(1)
 
-    # ── 3. Bind vault in Profile (set_vault) ─────────────────────────────────
+    # ── 3. Bind vault in Profile (set_vault) — retry up to 3 times ──────────
     print(f"\n[Deploy] Calling set_vault({vault_address}) on Profile…")
-    set_vault_tx = client.write_contract(
-        address=profile_address,
-        function_name="set_vault",
-        args=[vault_address],
-    )
-    print(f"  tx: {set_vault_tx}")
-    set_vault_receipt = client.wait_for_transaction_receipt(set_vault_tx, retries=30, interval=5000)
-    set_vault_result = set_vault_receipt.get("result_name") or set_vault_receipt.get("status_name")
-    print(f"  result: {set_vault_result}")
-    if not consensus_ok(set_vault_receipt):
-        print(f"ERROR: set_vault did not reach consensus: {set_vault_result}")
-        sys.exit(1)
+    set_vault_tx = set_vault_result = None
+    for attempt in range(1, 4):
+        try:
+            set_vault_tx = client.write_contract(
+                address=profile_address,
+                function_name="set_vault",
+                args=[vault_address],
+            )
+            print(f"  tx (attempt {attempt}): {set_vault_tx}")
+            set_vault_receipt = client.wait_for_transaction_receipt(set_vault_tx, retries=30, interval=5000)
+            set_vault_result = set_vault_receipt.get("result_name") or set_vault_receipt.get("status_name")
+            print(f"  result: {set_vault_result}")
+            if consensus_ok(set_vault_receipt):
+                break
+            print(f"  Attempt {attempt} failed ({set_vault_result}), retrying…")
+        except Exception as e:
+            print(f"  Attempt {attempt} error: {e}, retrying…")
+    # set_vault may error on retry (vault already set) — verify via readback instead
 
     # ── 4. Readbacks ─────────────────────────────────────────────────────────
     print("\n[Deploy] Reading back initial state…")
@@ -206,11 +232,17 @@ def main():
         function_name="get_vault_address",
         args=[],
     )
+    def _norm_addr(a: str) -> str:
+        s = str(a).lower().strip()
+        if s.startswith("addr#"):
+            return "0x" + s[5:]
+        return s
+
     readbacks = {
         "vault_stats": vault_stats,
         "next_profile_id": str(next_profile_id),
         "profile.vault_address": str(vault_addr_readback),
-        "vault_address_matches": str(vault_addr_readback).lower() == str(vault_address).lower(),
+        "vault_address_matches": _norm_addr(vault_addr_readback) == _norm_addr(vault_address),
     }
     print(json.dumps(readbacks, indent=2))
 

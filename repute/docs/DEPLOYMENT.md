@@ -10,62 +10,42 @@
 | Explorer | https://explorer-studio.genlayer.com |
 | Currency | GEN |
 
-## Deployment Steps
-
-1. Set deployer key (never commit):
-   ```bash
-   export REPUTE_DEPLOYER_PRIVATE_KEY=0x...
-   ```
-
-2. Verify network config before deployment:
-   ```bash
-   python scripts/preflight.py
-   ```
-
-3. Deploy Profile contract first, record address.
-
-4. Deploy Vault contract with Profile address as constructor argument.
-
-5. Set addresses in `.env.local`:
-   ```
-   NEXT_PUBLIC_PROFILE_CONTRACT_ADDRESS=0x...
-   NEXT_PUBLIC_VAULT_CONTRACT_ADDRESS=0x...
-   ```
-
-6. Build and deploy frontend:
-   ```bash
-   npm run build
-   ```
-
-## Deployment Evidence Record
-
-To be filled after funded deployment to chain 61999:
+## Deployment Evidence
 
 | Field | Value |
 |---|---|
-| Git SHA | (record after deployment) |
-| Profile contract SHA-256 | (run: sha256sum contracts/repute_profile.py) |
-| Vault contract SHA-256 | (run: sha256sum contracts/repute_vault.py) |
-| Network | GenLayer Studionet (chain 61999) |
-| Deployer address (public) | (record — no private key) |
-| Profile deployment tx | (explorer link) |
-| Profile address | (record) |
-| Vault deployment tx | (explorer link) |
-| Vault address | (record) |
-| Final consensus status | (ACCEPTED/FINALIZED) |
-| Actual execution result | (record return value) |
-| Final state readbacks | (record get_vault_stats, profile #1) |
+| Deployed at | 2026-09-20T22:48:04.045424Z |
+| Git SHA | `c8b3eff82efed62c35b2097de8c434b1a7933f73` |
+| Profile contract SHA-256 | `aaabc29b3860fc6c6b7a287e5b2029f4d338632f3b52cf455c3073265c8f758b` |
+| Vault contract SHA-256 | `ade85ba60cb972b5664d0542200cfca58da210fd1b5a41910f37b7ea727f3ad5` |
+| Deployer address | `0x778D1663f9D5b338aBaD5C62899830AD3520a32F` |
+| Profile deployment tx | [skipped](https://explorer-studio.genlayer.com/tx/skipped) |
+| Profile address | `0x2BA9Bc34A17E00f4d5DDD8212e1a7A6A73aBd1E5` |
+| Vault deployment tx | [skipped](https://explorer-studio.genlayer.com/tx/skipped) |
+| Vault address | `0xcB9f8D4936443A77C0cf3287A64E3087BdDe6407` |
+| set_vault tx | [0xa10d41da2dced702cb1b04e74675bdb94ad42665800f3c50e463b9b19e970d49](https://explorer-studio.genlayer.com/tx/0xa10d41da2dced702cb1b04e74675bdb94ad42665800f3c50e463b9b19e970d49) |
+| Profile consensus | SKIPPED |
+| Vault consensus | SKIPPED |
+| set_vault consensus | MAJORITY_AGREE |
+
+## Post-Deployment Readbacks
+
+```json
+{
+  "vault_stats": {
+    "available_liquidity": 0,
+    "repaid_principal": 0,
+    "reserved_liquidity": 0,
+    "total_collateral": 0,
+    "total_liquidity": 0
+  },
+  "next_profile_id": "1",
+  "profile.vault_address": "addr#cb9f8d4936443a77c0cf3287a64e3087bdde6407",
+  "vault_address_matches": true
+}
+```
 
 ## Verification
 
-After deployment, verify on explorer:
-- Profile contract: `https://explorer-studio.genlayer.com/address/<profile_address>`
-- Vault contract: `https://explorer-studio.genlayer.com/address/<vault_address>`
-
-Read initial state:
-```
-get_vault_stats() → {total_liquidity: 0, ...}
-get_next_profile_id() → 1
-```
-
-No fabricated evidence. All fields above are to be filled with actual on-chain data.
+- Profile: https://explorer-studio.genlayer.com/address/0x2BA9Bc34A17E00f4d5DDD8212e1a7A6A73aBd1E5
+- Vault: https://explorer-studio.genlayer.com/address/0xcB9f8D4936443A77C0cf3287A64E3087BdDe6407

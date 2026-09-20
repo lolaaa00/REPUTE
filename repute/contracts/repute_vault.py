@@ -2,6 +2,8 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
+import json
+from datetime import datetime, timezone
 
 # ────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -26,30 +28,6 @@ REVIEW_FRESHNESS_WINDOW = 30 * 24 * 3600
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Storage types
-# ────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class LoanRecord:
-    loan_id: u256
-    borrower: Address
-    profile_id: u256
-    credit_band_snapshot: str
-    collateral: u256
-    principal: u256
-    issued_at: u256
-    due_at: u256
-    repaid_amount: u256
-    status: str  # ACTIVE | REPAID | DEFAULTED | CLOSED
-
-
-@dataclass
-class LiquidityProvider:
-    provider: Address
-    deposited: u256
-
-
-# ────────────────────────────────────────────────────────────────────────────
 # Profile contract interface
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -66,17 +44,19 @@ class IReputeProfile:
 
 # ────────────────────────────────────────────────────────────────────────────
 # Contract
+# All complex storage is JSON strings inside TreeMap[K, str]
 # ────────────────────────────────────────────────────────────────────────────
 
 class ReputeVault(gl.Contract):
     profile_contract: Address
     next_loan_id: u256
-    loans: TreeMap[u256, LoanRecord]
+    # JSON-serialized LoanRecord dicts
+    loans: TreeMap[u256, str]
     # profile_id → active loan_id
     active_loan: TreeMap[u256, u256]
     has_active_loan: TreeMap[u256, bool]
-    # profile_id → loan_ids list
-    loan_history: TreeMap[u256, DynArray[u256]]
+    # profile_id → JSON-serialized list of loan_ids
+    loan_history: TreeMap[u256, str]
 
     # Vault accounting
     # total_liquidity: sum of LP deposits, reduced by net default losses
@@ -92,13 +72,46 @@ class ReputeVault(gl.Contract):
     lp_deposits: TreeMap[Address, u256]
     lp_list: DynArray[Address]
 
+    def _tx_time(self) -> int:
+        dt = datetime.fromisoformat(gl.message_raw["datetime"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+
     def __init__(self, profile_contract: Address):
-        self.profile_contract = profile_contract
+        self.profile_contract = Address(profile_contract)
         self.next_loan_id = u256(1)
         self.total_liquidity = u256(0)
         self.reserved_liquidity = u256(0)
         self.total_collateral = u256(0)
         self.repaid_principal = u256(0)
+
+    # ── serialization helpers ────────────────────────────────────────────────
+
+    def _save_loan(self, loan_id: u256, loan: dict):
+        self.loans[loan_id] = json.dumps({
+            "loan_id": int(loan["loan_id"]),
+            "borrower": str(loan["borrower"]),
+            "profile_id": int(loan["profile_id"]),
+            "credit_band_snapshot": loan["credit_band_snapshot"],
+            "collateral": int(loan["collateral"]),
+            "principal": int(loan["principal"]),
+            "issued_at": int(loan["issued_at"]),
+            "due_at": int(loan["due_at"]),
+            "repaid_amount": int(loan["repaid_amount"]),
+            "status": loan["status"],
+        })
+
+    def _load_loan(self, loan_id: u256) -> dict:
+        return json.loads(self.loans[loan_id])
+
+    def _load_history(self, profile_id: u256) -> list:
+        if profile_id not in self.loan_history:
+            return []
+        return json.loads(self.loan_history[profile_id])
+
+    def _save_history(self, profile_id: u256, hist: list):
+        self.loan_history[profile_id] = json.dumps(hist)
 
     # ── internal helpers ────────────────────────────────────────────────────
 
@@ -134,9 +147,9 @@ class ReputeVault(gl.Contract):
     # ── views ───────────────────────────────────────────────────────────────
 
     @gl.public.view
-    def get_loan(self, loan_id: u256) -> LoanRecord:
+    def get_loan(self, loan_id: u256) -> dict:
         assert loan_id in self.loans, "loan not found"
-        return self.loans[loan_id]
+        return self._load_loan(loan_id)
 
     @gl.public.view
     def get_active_loan_id(self, profile_id: u256) -> u256:
@@ -166,7 +179,7 @@ class ReputeVault(gl.Contract):
         """LP deposits GEN liquidity. Value sent with tx."""
         amount = int(gl.message.value)
         assert amount > 0, "no value sent"
-        caller = gl.message.sender
+        caller = gl.message.sender_address
 
         if int(self.lp_deposits.get(caller, u256(0))) == 0:
             self.lp_list.append(caller)
@@ -184,7 +197,7 @@ class ReputeVault(gl.Contract):
     @gl.public.write
     def withdraw_liquidity(self, amount: u256):
         """LP withdraws their nominal deposit balance, subject to available liquidity."""
-        caller = gl.message.sender
+        caller = gl.message.sender_address
         amount_int = int(amount)
         assert amount_int > 0, "amount must be positive"
 
@@ -200,7 +213,7 @@ class ReputeVault(gl.Contract):
 
         self._conservation_check()
 
-        caller.transfer(amount_int)
+        gl.get_contract_at(caller).emit_transfer(value=u256(amount_int))
 
     # ── borrow flow ─────────────────────────────────────────────────────────
 
@@ -211,121 +224,105 @@ class ReputeVault(gl.Contract):
         profile_id: the borrower's sealed profile.
         principal: amount to borrow (transferred to caller).
         """
-        caller = gl.message.sender
+        caller = gl.message.sender_address
         collateral = int(gl.message.value)
         principal_int = int(principal)
 
         assert collateral > 0, "collateral required"
         assert principal_int > 0, "principal must be positive"
 
-        # Verify caller owns profile
         operator_pid = self._profile().get_operator_profile_id(args=[caller])
         assert int(operator_pid) == int(profile_id), "not profile owner"
 
-        # Verify review is fresh
         fresh = self._profile().review_is_fresh(args=[profile_id])
         assert fresh, "review stale or missing"
 
-        # Read credit band
         band = self._profile().profile_credit_band(args=[profile_id])
         assert band != "NONE", "credit band NONE: not eligible"
 
-        # Compute max loan for this collateral
         max_loan = self._max_loan(collateral, band)
         assert principal_int <= max_loan, "principal exceeds band limit"
 
-        # Per-borrower hard cap
         assert principal_int <= PER_BORROWER_MAX, "exceeds per-borrower cap"
 
-        # No active loan
         if profile_id in self.has_active_loan:
             assert not self.has_active_loan[profile_id], "active loan exists"
 
-        # Liquidity cap
         avail = self._available_liquidity()
         assert principal_int <= avail, "insufficient vault liquidity"
 
-        # Concentration cap: principal <= 30% of (total_liquidity + total_collateral)
         pool = int(self.total_liquidity) + int(self.total_collateral)
         if pool > 0:
             concentration = (principal_int * 10000) // pool
             assert concentration <= CONCENTRATION_BPS, "concentration cap exceeded"
 
-        # Record loan — update storage BEFORE transfer
-        now = u256(gl.contract_runner.block_timestamp)
-        due = u256(int(now) + LOAN_DURATION)
+        now = self._tx_time()
+        due = now + LOAN_DURATION
 
         loan_id = self.next_loan_id
         self.next_loan_id = u256(int(loan_id) + 1)
 
-        loan = LoanRecord(
-            loan_id=loan_id,
-            borrower=caller,
-            profile_id=profile_id,
-            credit_band_snapshot=band,
-            collateral=u256(collateral),
-            principal=principal,
-            issued_at=now,
-            due_at=due,
-            repaid_amount=u256(0),
-            status="ACTIVE",
-        )
-        self.loans[loan_id] = loan
+        loan = {
+            "loan_id": int(loan_id),
+            "borrower": str(caller),
+            "profile_id": int(profile_id),
+            "credit_band_snapshot": band,
+            "collateral": collateral,
+            "principal": principal_int,
+            "issued_at": now,
+            "due_at": due,
+            "repaid_amount": 0,
+            "status": "ACTIVE",
+        }
+        self._save_loan(loan_id, loan)
 
-        # Update accounting
         self.total_collateral = u256(int(self.total_collateral) + collateral)
         self.reserved_liquidity = u256(int(self.reserved_liquidity) + principal_int)
         self.active_loan[profile_id] = loan_id
         self.has_active_loan[profile_id] = True
 
-        if profile_id not in self.loan_history:
-            self.loan_history[profile_id] = DynArray()
-        hist = self.loan_history[profile_id]
-        hist.append(loan_id)
-        self.loan_history[profile_id] = hist
+        hist = self._load_history(profile_id)
+        hist.append(int(loan_id))
+        self._save_history(profile_id, hist)
 
         self._conservation_check()
 
-        # Transfer principal to borrower
-        gl.message.sender.transfer(principal_int)
+        gl.get_contract_at(gl.message.sender_address).emit_transfer(value=u256(principal_int))
 
     # ── repayment ───────────────────────────────────────────────────────────
 
     @gl.public.write
     def repay(self, loan_id: u256):
         """Borrower repays principal. Sends exact principal as msg.value."""
-        caller = gl.message.sender
+        caller = gl.message.sender_address
         amount = int(gl.message.value)
 
         assert loan_id in self.loans, "loan not found"
-        loan = self.loans[loan_id]
-        assert loan.borrower == caller, "not borrower"
-        assert loan.status == "ACTIVE", "loan not active"
+        loan = self._load_loan(loan_id)
+        assert loan["borrower"] == str(caller), "not borrower"
+        assert loan["status"] == "ACTIVE", "loan not active"
 
-        principal_int = int(loan.principal)
+        principal_int = loan["principal"]
         assert amount == principal_int, "must repay exact principal"
 
-        profile_id = loan.profile_id
+        profile_id = u256(loan["profile_id"])
 
-        # Update state BEFORE any transfer
-        loan.repaid_amount = u256(amount)
-        loan.status = "REPAID"
-        self.loans[loan_id] = loan
+        loan["repaid_amount"] = amount
+        loan["status"] = "REPAID"
+        self._save_loan(loan_id, loan)
 
         self.has_active_loan[profile_id] = False
 
-        collateral_int = int(loan.collateral)
+        collateral_int = loan["collateral"]
         self.total_collateral = u256(int(self.total_collateral) - collateral_int)
         self.reserved_liquidity = u256(int(self.reserved_liquidity) - principal_int)
         self.repaid_principal = u256(int(self.repaid_principal) + principal_int)
 
         self._conservation_check()
 
-        # Record repayment on profile (cross-contract write)
         self._profile().record_repayment(args=[profile_id])
 
-        # Return collateral to borrower
-        caller.transfer(collateral_int)
+        gl.get_contract_at(caller).emit_transfer(value=u256(collateral_int))
 
     # ── default ─────────────────────────────────────────────────────────────
 
@@ -333,38 +330,26 @@ class ReputeVault(gl.Contract):
     def mark_default(self, loan_id: u256):
         """Permissionless. Anyone may call after due_at passes."""
         assert loan_id in self.loans, "loan not found"
-        loan = self.loans[loan_id]
-        assert loan.status == "ACTIVE", "loan not active"
+        loan = self._load_loan(loan_id)
+        assert loan["status"] == "ACTIVE", "loan not active"
 
-        now = int(gl.contract_runner.block_timestamp)
-        assert now > int(loan.due_at), "loan not yet due"
+        now = self._tx_time()
+        assert now > loan["due_at"], "loan not yet due"
 
-        profile_id = loan.profile_id
+        profile_id = u256(loan["profile_id"])
 
-        # Update state
-        loan.status = "DEFAULTED"
-        self.loans[loan_id] = loan
+        loan["status"] = "DEFAULTED"
+        self._save_loan(loan_id, loan)
 
         self.has_active_loan[profile_id] = False
 
-        principal_int = int(loan.principal)
-        collateral_int = int(loan.collateral)
+        principal_int = loan["principal"]
+        collateral_int = loan["collateral"]
 
         # Default accounting:
-        # - The principal was lent out (not in vault). reserved_liquidity decreases.
-        # - The collateral is already in the vault. total_collateral decreases.
-        # - The LP pool absorbs the net shortfall: principal - collateral.
-        # - total_liquidity decreases by the net loss so available_liquidity
-        #   stays consistent with the actual vault balance.
-        #
-        # Example: LP deposited 10, borrower posted 2 collateral, borrowed 2.5
-        # Actual vault balance after default = 9.5
-        # reserved_liquidity -= 2.5 → 0
-        # total_collateral -= 2 → 0
-        # net_loss = 2.5 - 2 = 0.5
-        # total_liquidity -= 0.5 → 9.5
-        # available = 9.5 + 0 - 0 = 9.5 ✓
-
+        # - reserved_liquidity decreases by principal (no longer lent out)
+        # - total_collateral decreases by collateral (stays in vault)
+        # - LP pool absorbs net shortfall: principal - collateral
         net_loss = principal_int - collateral_int
         self.reserved_liquidity = u256(int(self.reserved_liquidity) - principal_int)
         self.total_collateral = u256(int(self.total_collateral) - collateral_int)
@@ -374,5 +359,4 @@ class ReputeVault(gl.Contract):
 
         self._conservation_check()
 
-        # Record default on profile (cross-contract write)
         self._profile().record_default(args=[profile_id])

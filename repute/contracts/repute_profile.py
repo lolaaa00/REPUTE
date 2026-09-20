@@ -4,6 +4,7 @@
 from genlayer import *
 import json
 import hashlib
+from datetime import datetime, timezone
 
 # ────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -33,52 +34,8 @@ ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Storage types
-# ────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class Source:
-    url: str
-    label: str
-
-
-@dataclass
-class BorrowerProfile:
-    profile_id: u256
-    operator: Address
-    project_name: str
-    description: str
-    sources: DynArray[Source]
-    # proof_url: HTTPS URL that serves a file containing the operator wallet
-    # address and project name, proving project-controlled ownership.
-    # Must be hosted on the same domain as one of the declared sources.
-    proof_url: str
-    created_at: u256
-    sealed_hash: str
-    sealed: bool
-    latest_review_id: u256
-    has_review: bool
-    repayment_count: u256
-    default_count: u256
-    status: str  # ACTIVE | SUSPENDED
-
-
-@dataclass
-class OperationalReview:
-    review_id: u256
-    profile_id: u256
-    maintenance: str
-    attribution: str
-    continuity: str
-    transparency: str
-    evidence_json: str  # bounded JSON blob
-    reason: str
-    reviewed_at: u256
-    credit_band: str
-
-
-# ────────────────────────────────────────────────────────────────────────────
 # Contract
+# All complex storage is JSON strings inside TreeMap[K, str]
 # ────────────────────────────────────────────────────────────────────────────
 
 class ReputeProfile(gl.Contract):
@@ -88,26 +45,74 @@ class ReputeProfile(gl.Contract):
 
     next_profile_id: u256
     next_review_id: u256
-    profiles: TreeMap[u256, BorrowerProfile]
-    reviews: TreeMap[u256, OperationalReview]
+    # JSON-serialized BorrowerProfile dicts
+    profiles: TreeMap[u256, str]
+    # JSON-serialized OperationalReview dicts
+    reviews: TreeMap[u256, str]
     # operator address → profile id
     operator_profile: TreeMap[Address, u256]
 
+    def _now(self) -> int:
+        dt = datetime.fromisoformat(gl.message_raw["datetime"])
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+
     def __init__(self):
-        self.deployer = gl.message.sender
+        self.deployer = gl.message.sender_address
         self.vault_address = Address(ZERO_ADDRESS)
         self.next_profile_id = u256(1)
         self.next_review_id = u256(1)
+
+    # ── serialization helpers ────────────────────────────────────────────────
+
+    def _save_profile(self, pid: u256, p: dict):
+        self.profiles[pid] = json.dumps({
+            "profile_id": int(p["profile_id"]),
+            "operator": str(p["operator"]),
+            "project_name": p["project_name"],
+            "description": p["description"],
+            "sources": p["sources"],
+            "proof_url": p["proof_url"],
+            "created_at": int(p["created_at"]),
+            "sealed_hash": p["sealed_hash"],
+            "sealed": bool(p["sealed"]),
+            "latest_review_id": int(p["latest_review_id"]),
+            "has_review": bool(p["has_review"]),
+            "repayment_count": int(p["repayment_count"]),
+            "default_count": int(p["default_count"]),
+            "status": p["status"],
+        })
+
+    def _load_profile(self, pid: u256) -> dict:
+        return json.loads(self.profiles[pid])
+
+    def _save_review(self, rid: u256, r: dict):
+        self.reviews[rid] = json.dumps({
+            "review_id": int(r["review_id"]),
+            "profile_id": int(r["profile_id"]),
+            "maintenance": r["maintenance"],
+            "attribution": r["attribution"],
+            "continuity": r["continuity"],
+            "transparency": r["transparency"],
+            "evidence_json": r["evidence_json"],
+            "reason": r["reason"],
+            "reviewed_at": int(r["reviewed_at"]),
+            "credit_band": r["credit_band"],
+        })
+
+    def _load_review(self, rid: u256) -> dict:
+        return json.loads(self.reviews[rid])
 
     # ── access control ──────────────────────────────────────────────────────
 
     @gl.public.write
     def set_vault(self, vault: Address):
         """One-time: deployer binds the authorized vault address."""
-        assert gl.message.sender == self.deployer, "only deployer"
+        assert gl.message.sender_address == self.deployer, "only deployer"
         assert str(self.vault_address) == ZERO_ADDRESS, "vault already set"
         assert str(vault) != ZERO_ADDRESS, "vault cannot be zero address"
-        self.vault_address = vault
+        self.vault_address = Address(vault)
 
     @gl.public.view
     def get_vault_address(self) -> Address:
@@ -137,11 +142,11 @@ class ReputeProfile(gl.Contract):
             return without_scheme.lower()
         return without_scheme[:slash].lower()
 
-    def _seal_hash(self, profile: BorrowerProfile) -> str:
-        parts = [profile.project_name, profile.description, profile.proof_url]
-        for s in profile.sources:
-            parts.append(s.url)
-            parts.append(s.label)
+    def _seal_hash(self, profile: dict) -> str:
+        parts = [profile["project_name"], profile["description"], profile["proof_url"]]
+        for s in profile["sources"]:
+            parts.append(s["url"])
+            parts.append(s["label"])
         raw = "|".join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -151,21 +156,18 @@ class ReputeProfile(gl.Contract):
         attribution: str,
         continuity: str,
         transparency: str,
-        repayment_count: u256,
-        default_count: u256,
-        reviewed_at: u256,
-        now: u256,
+        repayment_count: int,
+        default_count: int,
+        reviewed_at: int,
+        now: int,
     ) -> str:
-        # Any default → cap at NONE forever unless rehabilitated
-        if int(default_count) > 0:
+        if default_count > 0:
             return "NONE"
 
-        # Review must be fresh
-        age = int(now) - int(reviewed_at)
+        age = now - reviewed_at
         if age > REVIEW_FRESHNESS_WINDOW:
             return "NONE"
 
-        # Attribution must not be UNRESOLVED or WEAK for any band above NONE
         if attribution in ("UNRESOLVED", "WEAK"):
             return "NONE"
 
@@ -175,12 +177,10 @@ class ReputeProfile(gl.Contract):
         maintenance_ok = maintenance in ("STRONG", "MODERATE")
         continuity_ok = continuity in ("STRONG", "MODERATE")
 
-        if all_strong_moderate and int(repayment_count) >= 5:
+        if all_strong_moderate and repayment_count >= 5:
             return "TRUSTED"
-        if maintenance_ok and continuity_ok and all_at_least_moderate and int(repayment_count) >= 2:
+        if maintenance_ok and continuity_ok and all_at_least_moderate and repayment_count >= 2:
             return "ESTABLISHED"
-        if maintenance_ok and all_at_least_moderate and int(repayment_count) == 0:
-            return "STARTER"
         if maintenance_ok and all_at_least_moderate:
             return "STARTER"
         return "NONE"
@@ -188,14 +188,14 @@ class ReputeProfile(gl.Contract):
     # ── views ───────────────────────────────────────────────────────────────
 
     @gl.public.view
-    def get_profile(self, profile_id: u256) -> BorrowerProfile:
+    def get_profile(self, profile_id: u256) -> dict:
         assert profile_id in self.profiles, "profile not found"
-        return self.profiles[profile_id]
+        return self._load_profile(profile_id)
 
     @gl.public.view
-    def get_review(self, review_id: u256) -> OperationalReview:
+    def get_review(self, review_id: u256) -> dict:
         assert review_id in self.reviews, "review not found"
-        return self.reviews[review_id]
+        return self._load_review(review_id)
 
     @gl.public.view
     def get_operator_profile_id(self, operator: Address) -> u256:
@@ -205,25 +205,25 @@ class ReputeProfile(gl.Contract):
     @gl.public.view
     def profile_credit_band(self, profile_id: u256) -> str:
         assert profile_id in self.profiles, "profile not found"
-        p = self.profiles[profile_id]
-        if not p.has_review:
+        p = self._load_profile(profile_id)
+        if not p["has_review"]:
             return "NONE"
-        r = self.reviews[p.latest_review_id]
-        now = u256(gl.contract_runner.block_timestamp)
+        r = self._load_review(u256(p["latest_review_id"]))
+        now = self._now()
         return self._derive_credit_band(
-            r.maintenance, r.attribution, r.continuity, r.transparency,
-            p.repayment_count, p.default_count, r.reviewed_at, now
+            r["maintenance"], r["attribution"], r["continuity"], r["transparency"],
+            p["repayment_count"], p["default_count"], r["reviewed_at"], now
         )
 
     @gl.public.view
     def review_is_fresh(self, profile_id: u256) -> bool:
         assert profile_id in self.profiles, "profile not found"
-        p = self.profiles[profile_id]
-        if not p.has_review:
+        p = self._load_profile(profile_id)
+        if not p["has_review"]:
             return False
-        r = self.reviews[p.latest_review_id]
-        now = int(gl.contract_runner.block_timestamp)
-        return (now - int(r.reviewed_at)) <= REVIEW_FRESHNESS_WINDOW
+        r = self._load_review(u256(p["latest_review_id"]))
+        now = self._now()
+        return (now - r["reviewed_at"]) <= REVIEW_FRESHNESS_WINDOW
 
     @gl.public.view
     def get_next_profile_id(self) -> u256:
@@ -246,7 +246,7 @@ class ReputeProfile(gl.Contract):
         project name. This is independently fetched by validators to prove that
         the operator controls the project infrastructure.
         """
-        caller = gl.message.sender
+        caller = gl.message.sender_address
         assert caller not in self.operator_profile, "profile exists"
         assert MIN_SOURCES <= len(source_urls) <= MAX_SOURCES, "source count out of range"
         assert len(source_urls) == len(source_labels), "url/label mismatch"
@@ -254,8 +254,8 @@ class ReputeProfile(gl.Contract):
         assert 1 <= len(description) <= MAX_DESC_LEN, "desc length invalid"
         assert self._validate_url(proof_url), "invalid proof_url"
 
-        sources: DynArray[Source] = DynArray()
-        seen_domains: DynArray[str] = DynArray()
+        sources_list = []
+        seen_domains = []
         for i in range(len(source_urls)):
             url = source_urls[i]
             assert self._validate_url(url), f"invalid url: {url}"
@@ -263,9 +263,8 @@ class ReputeProfile(gl.Contract):
             for d in seen_domains:
                 assert d != domain, "duplicate domain"
             seen_domains.append(domain)
-            sources.append(Source(url=url, label=source_labels[i]))
+            sources_list.append({"url": url, "label": source_labels[i]})
 
-        # proof_url must be on one of the declared source domains
         proof_domain = self._canonical_domain(proof_url)
         domain_match = False
         for d in seen_domains:
@@ -276,57 +275,56 @@ class ReputeProfile(gl.Contract):
         pid = self.next_profile_id
         self.next_profile_id = u256(int(pid) + 1)
 
-        now = u256(gl.contract_runner.block_timestamp)
-        profile = BorrowerProfile(
-            profile_id=pid,
-            operator=caller,
-            project_name=project_name,
-            description=description,
-            sources=sources,
-            proof_url=proof_url,
-            created_at=now,
-            sealed_hash="",
-            sealed=False,
-            latest_review_id=u256(0),
-            has_review=False,
-            repayment_count=u256(0),
-            default_count=u256(0),
-            status="ACTIVE",
-        )
-        profile.sealed_hash = self._seal_hash(profile)
-        profile.sealed = True
+        now = self._now()
+        profile = {
+            "profile_id": int(pid),
+            "operator": str(caller),
+            "project_name": project_name,
+            "description": description,
+            "sources": sources_list,
+            "proof_url": proof_url,
+            "created_at": now,
+            "sealed_hash": "",
+            "sealed": False,
+            "latest_review_id": 0,
+            "has_review": False,
+            "repayment_count": 0,
+            "default_count": 0,
+            "status": "ACTIVE",
+        }
+        profile["sealed_hash"] = self._seal_hash(profile)
+        profile["sealed"] = True
 
-        self.profiles[pid] = profile
+        self._save_profile(pid, profile)
         self.operator_profile[caller] = pid
         return pid
 
     @gl.public.write
     def request_operational_review(self, profile_id: u256) -> u256:
         assert profile_id in self.profiles, "profile not found"
-        p = self.profiles[profile_id]
-        assert p.operator == gl.message.sender, "not operator"
-        assert p.sealed, "profile not sealed"
-        assert p.status == "ACTIVE", "profile not active"
+        p = self._load_profile(profile_id)
+        assert p["operator"] == str(gl.message.sender_address), "not operator"
+        assert p["sealed"], "profile not sealed"
+        assert p["status"] == "ACTIVE", "profile not active"
 
-        # Build source list for LLM
         source_list = []
-        for i, src in enumerate(p.sources):
-            source_list.append({"id": i + 1, "url": src.url, "label": src.label})
+        for i, src in enumerate(p["sources"]):
+            source_list.append({"id": i + 1, "url": src["url"], "label": src["label"]})
 
-        operator_addr = str(p.operator)
-        review_id = self._run_operational_review(profile_id, p, source_list, operator_addr, p.proof_url)
+        operator_addr = p["operator"]
+        review_id = self._run_operational_review(profile_id, p, source_list, operator_addr, p["proof_url"])
         return review_id
 
     def _run_operational_review(
         self,
         profile_id: u256,
-        profile: BorrowerProfile,
+        profile: dict,
         source_list: list,
         operator_addr: str,
         proof_url: str,
     ) -> u256:
         def leader_fn():
-            findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr, proof_url)
+            findings = _fetch_and_evaluate(source_list, profile["project_name"], operator_addr, proof_url)
             return findings
 
         def validator_fn(leader_result) -> bool:
@@ -336,22 +334,18 @@ class ReputeProfile(gl.Contract):
             if not _valid_review_shape(candidate):
                 return False
 
-            # Independent fetch and evaluation
-            my_findings = _fetch_and_evaluate(source_list, profile.project_name, operator_addr, proof_url)
+            my_findings = _fetch_and_evaluate(source_list, profile["project_name"], operator_addr, proof_url)
             if not _valid_review_shape(my_findings):
                 return False
 
-            # EXACT agreement required on all material dimension bands
             for dim in ("maintenance", "attribution", "continuity", "transparency"):
                 c_val = candidate.get(dim, "UNRESOLVED")
                 m_val = my_findings.get(dim, "UNRESOLVED")
                 if c_val not in ALLOWED_BANDS or m_val not in ALLOWED_BANDS:
                     return False
-                # Exact match — no tolerance for disagreement on consequential fields
                 if c_val != m_val:
                     return False
 
-            # Each dimension must have at least one non-trivial evidence excerpt
             leader_evidence = candidate.get("evidence", [])
             seen_source_ids = {s["id"] for s in source_list}
             for dim in ("maintenance", "attribution", "continuity", "transparency"):
@@ -362,7 +356,6 @@ class ReputeProfile(gl.Contract):
                 excerpt = ev.get("excerpt", "")
                 if not excerpt or len(excerpt) < 20:
                     return False
-                # source_id must refer to a real declared source
                 if ev.get("source_id") not in seen_source_ids:
                     return False
 
@@ -390,33 +383,33 @@ class ReputeProfile(gl.Contract):
             })
         evidence_json = json.dumps(bounded_evidence)
 
-        now = u256(gl.contract_runner.block_timestamp)
+        now = self._now()
         credit_band = self._derive_credit_band(
             maintenance, attribution, continuity, transparency,
-            profile.repayment_count, profile.default_count, now, now
+            profile["repayment_count"], profile["default_count"], now, now
         )
 
         rid = self.next_review_id
         self.next_review_id = u256(int(rid) + 1)
 
-        review = OperationalReview(
-            review_id=rid,
-            profile_id=profile_id,
-            maintenance=maintenance,
-            attribution=attribution,
-            continuity=continuity,
-            transparency=transparency,
-            evidence_json=evidence_json,
-            reason=reason,
-            reviewed_at=now,
-            credit_band=credit_band,
-        )
-        self.reviews[rid] = review
+        review = {
+            "review_id": int(rid),
+            "profile_id": int(profile_id),
+            "maintenance": maintenance,
+            "attribution": attribution,
+            "continuity": continuity,
+            "transparency": transparency,
+            "evidence_json": evidence_json,
+            "reason": reason,
+            "reviewed_at": now,
+            "credit_band": credit_band,
+        }
+        self._save_review(rid, review)
 
-        p2 = self.profiles[profile_id]
-        p2.latest_review_id = rid
-        p2.has_review = True
-        self.profiles[profile_id] = p2
+        p2 = self._load_profile(profile_id)
+        p2["latest_review_id"] = int(rid)
+        p2["has_review"] = True
+        self._save_profile(profile_id, p2)
 
         return rid
 
@@ -424,21 +417,21 @@ class ReputeProfile(gl.Contract):
     def record_repayment(self, profile_id: u256):
         """Called by the authorized vault only. Increments repayment counter."""
         assert str(self.vault_address) != ZERO_ADDRESS, "vault not configured"
-        assert gl.message.sender == self.vault_address, "only authorized vault"
+        assert gl.message.sender_address == self.vault_address, "only authorized vault"
         assert profile_id in self.profiles, "profile not found"
-        p = self.profiles[profile_id]
-        p.repayment_count = u256(int(p.repayment_count) + 1)
-        self.profiles[profile_id] = p
+        p = self._load_profile(profile_id)
+        p["repayment_count"] = p["repayment_count"] + 1
+        self._save_profile(profile_id, p)
 
     @gl.public.write
     def record_default(self, profile_id: u256):
         """Called by the authorized vault only. Increments default counter."""
         assert str(self.vault_address) != ZERO_ADDRESS, "vault not configured"
-        assert gl.message.sender == self.vault_address, "only authorized vault"
+        assert gl.message.sender_address == self.vault_address, "only authorized vault"
         assert profile_id in self.profiles, "profile not found"
-        p = self.profiles[profile_id]
-        p.default_count = u256(int(p.default_count) + 1)
-        self.profiles[profile_id] = p
+        p = self._load_profile(profile_id)
+        p["default_count"] = p["default_count"] + 1
+        self._save_profile(profile_id, p)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -459,12 +452,10 @@ def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str
     operator_lower = operator_addr.lower()
     project_lower = project_name.lower()
 
-    # Fetch the designated proof URL first — this is the authoritative ownership check
     try:
         proof_content = gl.nondet.web.get(proof_url, max_bytes=4096)
         if proof_content:
             proof_lower = proof_content.lower()
-            # Both wallet AND project name must appear in the proof document
             if operator_lower in proof_lower and project_lower in proof_lower:
                 ownership_proven = True
     except Exception:
@@ -488,7 +479,6 @@ def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str
         except Exception:
             fetched.append({"source_id": src["id"], "label": label, "url": url, "content": ""})
 
-    # Map source_id → fetched content for excerpt grounding
     source_content_map = {s["source_id"]: s["content"] for s in fetched}
 
     sources_text = "\n\n---\n\n".join(
@@ -566,13 +556,9 @@ Sources fetched:
             "reason": "Failed to parse model output.",
         }
 
-    # Hard-enforce ownership binding regardless of LLM output
     if not ownership_proven:
         result["attribution"] = "UNRESOLVED"
 
-    # Ground evidence: remove any evidence item whose excerpt cannot be
-    # found verbatim (case-insensitive) in the fetched source content.
-    # This prevents fabricated evidence from persisting in the record.
     grounded_evidence = []
     raw_evidence = result.get("evidence", [])
     if isinstance(raw_evidence, list):
