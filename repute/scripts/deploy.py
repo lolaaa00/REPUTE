@@ -104,6 +104,7 @@ def main():
 
     try:
         from genlayer_py.client import GenLayerClient
+        from genlayer_py import chains
         from eth_account import Account
     except ImportError:
         print("\nERROR: genlayer-py not installed. Run: pip install genlayer-py")
@@ -118,50 +119,58 @@ def main():
     print(f"[Deploy] Profile SHA-256 : {profile_sha}")
     print(f"[Deploy] Vault SHA-256   : {vault_sha}")
 
-    client = GenLayerClient(endpoint=RPC_URL)
+    client = GenLayerClient(chain_config=chains.studionet, account=account)
+
+    def extract_address(receipt, tx_hash):
+        """Extract deployed contract address from receipt."""
+        # genlayer-py 0.16.x: address is in data.contract_address or contract_address
+        data = receipt.get("data") or {}
+        addr = (
+            data.get("contract_address")
+            or receipt.get("contract_address")
+            or receipt.get("to_address")
+            or receipt.get("recipient")
+        )
+        if not addr:
+            # fallback: re-fetch the transaction
+            tx = client.get_transaction(tx_hash)
+            addr = (
+                (tx.get("data") or {}).get("contract_address")
+                or tx.get("contract_address")
+                or tx.get("to_address")
+                or tx.get("recipient")
+            )
+        return addr
+
+    def consensus_ok(receipt):
+        result = receipt.get("result_name") or receipt.get("status_name") or ""
+        return str(result) in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED")
 
     # ── 1. Deploy Profile ────────────────────────────────────────────────────
     print("\n[Deploy] Deploying ReputeProfile…")
     profile_code = PROFILE_CONTRACT.read_bytes()
-    profile_tx_hash = client.deploy_contract(
-        code=profile_code,
-        account=account,
-        args=[],
-    )
+    profile_tx_hash = client.deploy_contract(code=profile_code, args=[])
     print(f"  tx: {profile_tx_hash}")
-    profile_receipt = client.wait_for_transaction_receipt(
-        profile_tx_hash, retries=20, interval=5000
-    )
-    profile_address = profile_receipt.get("to_address") or profile_receipt.get("recipient")
-    if not profile_address:
-        # Some SDK versions return the address differently
-        profile_address = client.get_transaction(profile_tx_hash).get("to_address")
-    profile_result = profile_receipt.get("result_name", profile_receipt.get("status_name", "?"))
+    profile_receipt = client.wait_for_transaction_receipt(profile_tx_hash, retries=30, interval=5000)
+    profile_address = extract_address(profile_receipt, profile_tx_hash)
+    profile_result = profile_receipt.get("result_name") or profile_receipt.get("status_name")
     print(f"  address : {profile_address}")
     print(f"  result  : {profile_result}")
-    if str(profile_result) not in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED"):
+    if not consensus_ok(profile_receipt):
         print(f"ERROR: Profile deployment did not reach consensus: {profile_result}")
         sys.exit(1)
 
     # ── 2. Deploy Vault ──────────────────────────────────────────────────────
     print("\n[Deploy] Deploying ReputeVault…")
     vault_code = VAULT_CONTRACT.read_bytes()
-    vault_tx_hash = client.deploy_contract(
-        code=vault_code,
-        account=account,
-        args=[profile_address],
-    )
+    vault_tx_hash = client.deploy_contract(code=vault_code, args=[profile_address])
     print(f"  tx: {vault_tx_hash}")
-    vault_receipt = client.wait_for_transaction_receipt(
-        vault_tx_hash, retries=20, interval=5000
-    )
-    vault_address = vault_receipt.get("to_address") or vault_receipt.get("recipient")
-    if not vault_address:
-        vault_address = client.get_transaction(vault_tx_hash).get("to_address")
-    vault_result = vault_receipt.get("result_name", vault_receipt.get("status_name", "?"))
+    vault_receipt = client.wait_for_transaction_receipt(vault_tx_hash, retries=30, interval=5000)
+    vault_address = extract_address(vault_receipt, vault_tx_hash)
+    vault_result = vault_receipt.get("result_name") or vault_receipt.get("status_name")
     print(f"  address : {vault_address}")
     print(f"  result  : {vault_result}")
-    if str(vault_result) not in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED"):
+    if not consensus_ok(vault_receipt):
         print(f"ERROR: Vault deployment did not reach consensus: {vault_result}")
         sys.exit(1)
 
@@ -170,16 +179,13 @@ def main():
     set_vault_tx = client.write_contract(
         address=profile_address,
         function_name="set_vault",
-        account=account,
         args=[vault_address],
     )
     print(f"  tx: {set_vault_tx}")
-    set_vault_receipt = client.wait_for_transaction_receipt(
-        set_vault_tx, retries=20, interval=5000
-    )
-    set_vault_result = set_vault_receipt.get("result_name", set_vault_receipt.get("status_name", "?"))
+    set_vault_receipt = client.wait_for_transaction_receipt(set_vault_tx, retries=30, interval=5000)
+    set_vault_result = set_vault_receipt.get("result_name") or set_vault_receipt.get("status_name")
     print(f"  result: {set_vault_result}")
-    if str(set_vault_result) not in ("AGREE", "MAJORITY_AGREE", "ACCEPTED", "FINALIZED"):
+    if not consensus_ok(set_vault_receipt):
         print(f"ERROR: set_vault did not reach consensus: {set_vault_result}")
         sys.exit(1)
 
