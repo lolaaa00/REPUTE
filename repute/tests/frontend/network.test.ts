@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   STUDIONET_CHAIN_ID,
   STUDIONET_RPC,
@@ -6,6 +6,16 @@ import {
   explorerTx,
   explorerAddress,
 } from "@/lib/genlayer/network";
+import {
+  DEFAULT_PROFILE_ADDRESS,
+  DEFAULT_VAULT_ADDRESS,
+  getProfileAddress,
+  getVaultAddress,
+} from "@/lib/contract/addresses";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("network constants", () => {
   it("chain ID is 61999", () => {
@@ -30,5 +40,12 @@ describe("network constants", () => {
     const url = explorerAddress("0x1234");
     expect(url).toContain("explorer-studio.genlayer.com");
     expect(url).toContain("0x1234");
+  });
+
+  it("never resolves an unset or zero address", () => {
+    vi.stubEnv("NEXT_PUBLIC_PROFILE_CONTRACT_ADDRESS", "0x0000000000000000000000000000000000000000");
+    vi.stubEnv("NEXT_PUBLIC_VAULT_CONTRACT_ADDRESS", "");
+    expect(getProfileAddress()).toBe(DEFAULT_PROFILE_ADDRESS);
+    expect(getVaultAddress()).toBe(DEFAULT_VAULT_ADDRESS);
   });
 });
