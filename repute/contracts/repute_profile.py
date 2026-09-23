@@ -328,9 +328,9 @@ class ReputeProfile(gl.Contract):
             return findings
 
         def validator_fn(leader_result) -> bool:
-            if not isinstance(leader_result, gl.vm.Return):
+            candidate = _consensus_calldata(leader_result)
+            if candidate is None:
                 return False
-            candidate = leader_result.calldata
             if not _valid_review_shape(candidate):
                 return False
 
@@ -362,7 +362,8 @@ class ReputeProfile(gl.Contract):
             return True
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
-        findings = result.calldata
+        findings = _consensus_calldata(result)
+        assert findings is not None and _valid_review_shape(findings), "operational review returned malformed consensus data"
 
         def _safe_band(val):
             return val if val in ALLOWED_BANDS else "UNRESOLVED"
@@ -437,6 +438,13 @@ class ReputeProfile(gl.Contract):
 # ────────────────────────────────────────────────────────────────────────────
 # Non-deterministic helpers
 # ────────────────────────────────────────────────────────────────────────────
+def _consensus_calldata(value):
+    if isinstance(value, dict):
+        nested = value.get("calldata")
+        return nested if isinstance(nested, dict) else value
+    calldata = getattr(value, "calldata", None)
+    return calldata if isinstance(calldata, dict) else None
+
 
 def _fetch_and_evaluate(source_list: list, project_name: str, operator_addr: str, proof_url: str) -> dict:
     """
