@@ -18,14 +18,20 @@ function resolveAddress(
   fallback: `0x${string}`,
   label: string,
 ): `0x${string}` {
-  const candidate = (raw?.trim() || fallback) as string;
-  if (!/^0x[0-9a-fA-F]{40}$/.test(candidate) || candidate.toLowerCase() === ZERO_ADDRESS) {
+  const configured = raw?.trim();
+  // Treat a stale all-zero Vercel value like an unset value. Never send it to
+  // genlayer-js, where it produces the opaque "Contract ... not found" error.
+  if (!configured || configured.toLowerCase() === ZERO_ADDRESS) {
+    return fallback;
+  }
+
+  if (!/^0x[0-9a-fA-F]{40}$/.test(configured)) {
     throw new Error(
       `${label} is not configured with a valid Studionet contract address. ` +
         `Set NEXT_PUBLIC_${label === "Profile" ? "PROFILE" : "VAULT"}_CONTRACT_ADDRESS.`,
     );
   }
-  return candidate as `0x${string}`;
+  return configured as `0x${string}`;
 }
 
 export function getProfileAddress(): `0x${string}` {
